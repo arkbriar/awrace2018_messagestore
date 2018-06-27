@@ -1,0 +1,29 @@
+# Use the Google style with these modifications:
+#
+# 1) lines can be up to 100 chars long rather than 80, and
+# 2) use a four space indent rather than two spaces.
+#
+BasedOnStyle: Google
+ColumnLimit: 100
+IndentWidth: 4
+# We don't want OCLint pragmas to be reformatted.
+CommentPragmas: '^!OCLINT'
+---
+SortIncludes: false
+Language: Cpp
+ColumnLimit: 100
+IndentWidth: 4
+AccessModifierOffset: -4
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: true
+AllowShortLoopsOnASingleLine: true
+---
+Language: Java
+ColumnLimit: 100
+IndentWidth: 4
+BreakAfterJavaFieldAnnotations: true
+---
+Language: Proto
+ColumnLimit: 100
+IndentWidth: 2
+---

@@ -6,9 +6,11 @@ set(CMAKE_CXX_STANDARD 11)
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
-set(SOURCE_FILES queue_store.cpp)
+set(SOURCE_FILES queue_store.cc storage.cc)
 
 add_library(queue_race SHARED ${SOURCE_FILES})
+
+target_link_libraries(queue_race tbb)
 
 # In case you need boost::filesystem
 #target_link_libraries(queue_race boost_filesystem boost_system)
@@ -20,7 +22,7 @@ add_library(queue_race SHARED ${SOURCE_FILES})
 #target_link_libraries(queue_race lzma)
 
 # In case you need snappy
-#target_link_libraries(queue_race snappy)
+target_link_libraries(queue_race snappy)
 
 # In case you need lz
 #target_link_libraries(queue_race z)
