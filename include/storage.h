@@ -24,40 +24,85 @@ struct __attribute__((__packed__)) FilePageHeader {
     uint64_t prev, next;
 };
 
+#define FILE_PAGE_HEADER_SIZE sizeof(FilePageHeader)
+#define FILE_PAGE_AVALIABLE_SIZE (FILE_PAGE_SIZE - FILE_PAGE_HEADER_SIZE)
+
 struct __attribute__((__packed__)) FilePage {
     FilePageHeader header;
-    uint8_t content[FILE_PAGE_SIZE - sizeof(header)];
+    uint8_t content[FILE_PAGE_AVALIABLE_SIZE];
 };
 
 struct __attribute__((__packed__)) IndexEntry {
     uint64_t offset;
+    uint16_t raw_length;
     uint16_t length;
 };
 
 struct __attribute__((__packed__)) IndexPageSummary {
     uint32_t queue_id;
     uint32_t prefix_sum = 0;
-    uint16_t size = 0;
-    uint16_t position = 0;
+    volatile uint16_t size = 0;
+    uint16_t write_offset = 0;
 };
 
+#define ONE_TERA_BYTES (1024ULL * 1024ULL * 1024ULL * 1024ULL)
+// Maximum one tera bytes pages
+#define PAGE_OFFSET_LIMIT (ONE_TERA_BYTES / FILE_PAGE_SIZE)
+
 class PagedFile {
+    template <class T>
+    union Convertor {
+        T t;
+        uint8_t bytes[sizeof(T)];
+    };
+
 public:
     using LoaderFunc = FilePage (*)(uint64_t);
     // FIXME here loader is empty
     PagedFile(const String& file, size_t cache_capacity)
         : file_(file), cache_(nullptr, cache_capacity) {}
 
-    uint64_t next_page_offset() { return next_page_offset_.fetch_add(FILE_PAGE_SIZE); }
-
 protected:
-    FilePage new_page(uint64_t offset);
+    void ensure_file_size(uint64_t size);
+
+public:
+    template <class T>
+    T read_from_page(uint64_t page_offset, uint16_t slot_offset) {
+        assert(page_offset < PAGE_OFFSET_LIMIT &&
+               slot_offset + sizeof(T) < FILE_PAGE_AVALIABLE_SIZE);
+
+        // FIXME load page from lru cache or disk
+        FilePage* page = nullptr;
+        Convertor<T> convertor;
+        memcpy(convertor.bytes, page->content[slot_offset], sizeof(T));
+        return convertor.t;
+    }
+
+    template <class T>
+    void write_to_page(const T& data, uint64_t page_offset, uint16_t slot_offset) {
+        assert(page_offset < PAGE_OFFSET_LIMIT &&
+               slot_offset + sizeof(T) < FILE_PAGE_AVALIABLE_SIZE);
+
+        // FIXME load page from lru cache or disk
+        FilePage* page = nullptr;
+        Convertor<T>* convertor = reinterpret_cast<Convertor<T>*>(page->content + slot_offset);
+        convertor->t = data;
+    }
+
+    void write_to_page(const void* data, size_t size, uint64_t page_offset, uint16_t slot_offset) {
+        assert(page_offset < PAGE_OFFSET_LIMIT && slot_offset + size < FILE_PAGE_AVALIABLE_SIZE);
+        // FIXME load page from lru cache or disk
+        FilePage* page = nullptr;
+        memcpy(page->content + slot_offset, data, size);
+    }
+
+    uint64_t next_page_offset() { return next_page_offset_.fetch_add(FILE_PAGE_SIZE); }
 
 private:
     int fd_;
     String file_;
     Atomic<uint64_t> next_page_offset_ = 0;
-    ConcurrentLruCache<uint64_t, FilePage> cache_;
+    ConcurrentLruCache<uint64_t, FilePage*> cache_;
 };
 
 #define NEGATIVE_OFFSET uint64_t(-1LL)
@@ -87,19 +132,31 @@ protected:
     static uint64_t allocate_new_page(PagedFile* file, uint64_t prev_offset,
                                       Atomic<uint64_t>& offset, bool& allocated);
 
+    // Allocating next slots for writing. Currently they are not
+    // thread-safe.
     static uint64_t allocate_index_slot(IndexPageSummary& summary);
+    void allocate_next_index_slot(uint64_t& page_off, uint64_t& slot_off);
+    void allocate_next_data_slot(uint64_t& page_off, uint64_t& slot_off, uint16_t size);
+
+    uint64_t binary_search_index_page(uint64_t offset);
 
 private:
     uint32_t queue_id_;
-    Atomic<uint64_t> first_index_page_offset_ = NEGATIVE_OFFSET,
-                     last_index_page_offset_ = NEGATIVE_OFFSET;
-    Atomic<uint64_t> first_data_page_offset_ = NEGATIVE_OFFSET,
-                     last_data_page_offset_ = NEGATIVE_OFFSET;
+    String queue_name_;
+
+    // Statistics, they are not accurate at some timepoint,
+    // so use them just as hints.
     Atomic<uint32_t> message_num_ = 0;
     Atomic<uint32_t> index_page_num_ = 0;
     Atomic<uint32_t> data_page_num_ = 0;
-    String queue_name_;
-    ConcurrentHashMap<uint64_t, IndexPageSummary> summaries_;
+
+    ConcurrentHashMap<uint64_t, IndexPageSummary> summary_map_;
+    ConcurrentVector<const IndexPageSummary*> summaries_;
+
+    // Atomic cursor for writing data
+    Atomic<uint64_t> cur_index_page_idx_ = NEGATIVE_OFFSET;
+    Atomic<uint64_t> cur_data_page_idx_ = NEGATIVE_OFFSET;
+    Atomic<uint64_t> cur_data_slot_off_ = 0;
 
     PagedFile *index_file_, *data_file_;
 };

@@ -1,9 +1,12 @@
 #ifndef QUEUE_RACE_COMMON_H
 #define QUEUE_RACE_COMMON_H
 
+#include <algorithm>
 #include <atomic>
 #include <boost/scoped_ptr.hpp>
+#include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
