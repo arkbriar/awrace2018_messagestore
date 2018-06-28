@@ -7,6 +7,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -48,7 +49,7 @@ using ConstConcurrentHashMapAccessor = typename ConcurrentHashMap<K, V>::const_a
 template <class T>
 using ConcurrentVector = tbb::concurrent_vector<T>;
 template <class K, class V>
-using ConcurrentLruCache = tbb::concurrent_lru_cache<K, V>;
+using ConcurrentLruCache = tbb::concurrent_lru_cache<K, V, typename std::function<V(K)>>;
 }  // namespace race2018
 
 #endif  // QUEUE_RACE_COMMON_H

@@ -1,6 +1,7 @@
 #ifndef QUEUE_RACE_STORAGE_H
 #define QUEUE_RACE_STORAGE_H
 
+#include <sys/mman.h>
 #include "common.h"
 
 namespace race2018 {
@@ -57,10 +58,21 @@ class PagedFile {
     };
 
 public:
-    using LoaderFunc = FilePage (*)(uint64_t);
     // FIXME here loader is empty
     PagedFile(const String& file, size_t cache_capacity)
-        : file_(file), cache_(nullptr, cache_capacity) {}
+        : file_(file),
+          cache_(
+              [this](uint64_t offset) {
+                  void* address = ::mmap(nullptr, FILE_PAGE_SIZE, PROT_READ | PROT_WRITE,
+                                         MAP_SHARED | MAP_POPULATE, this->fd_, offset);
+                  if (address == MAP_FAILED) {
+                      LOG("mmap failed due to errno: ", errno);
+                      return nullptr;
+                  }
+
+                  return reinterpret_cast<FilePage*>(address);
+              },
+              cache_capacity) {}
 
 protected:
     void ensure_file_size(uint64_t size);
