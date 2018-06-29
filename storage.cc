@@ -47,10 +47,6 @@ void Queue::allocate_next_index_slot(uint64_t& page_off, uint64_t& slot_off) {
         // concurrent insert, this will not cause replacing, refer to ttb's doc
         IndexPageSummary index_page_summary;
         index_page_summary.page_offset = page_off;
-        if (!summaries_.empty()) {
-            auto& back_ptr = summaries_.back();
-            index_page_summary.prefix_sum = back_ptr->prefix_sum + back_ptr->size;
-        }
         summary_map_.insert(it, std::make_pair(page_off, index_page_summary));
         slot_off = allocate_index_slot(const_cast<IndexPageSummary&>(it->second));
         if (allocated) {
@@ -110,14 +106,17 @@ void Queue::put(const MemBlock& message) {
     message_num_.fetch_add(1);
 }
 
-PageSegment generate_page_segment_from(const IndexPageSummary* summary, uint64_t& msg_offset,
-                                       uint64_t& msg_num) {
+PageSegment generate_page_segment_from(const IndexPageSummary* summary, size_t idx,
+                                       uint64_t& msg_offset, uint64_t& msg_num) {
     assert(msg_num > 0);
 
     PageSegment segment;
     segment.page_offset = summary->page_offset;
-    segment.start_slot_offset = (msg_offset - summary->prefix_sum) * INDEX_ENTRY_SLOT_SIZE;
-    uint64_t num_this_seg = std::min(uint64_t(MAX_INDEX_ENTRIES_IN_PAGE), msg_num);
+    segment.start_slot_offset =
+        (msg_offset - MAX_INDEX_ENTRIES_IN_PAGE * idx) * INDEX_ENTRY_SLOT_SIZE;
+    uint64_t num_this_seg = std::min(
+        uint64_t((summary->write_offset - segment.start_slot_offset) / INDEX_ENTRY_SLOT_SIZE),
+        msg_num);
     segment.end_slot_offset = segment.start_slot_offset + num_this_seg * INDEX_ENTRY_SLOT_SIZE;
 
     msg_offset += num_this_seg;
@@ -125,28 +124,14 @@ PageSegment generate_page_segment_from(const IndexPageSummary* summary, uint64_t
     return segment;
 }
 
-size_t binary_search(const ConcurrentVector<const IndexPageSummary*>& summaries, uint64_t target) {
-    size_t cur_size = summaries.size();
-    size_t first = 0, last = cur_size;
-    while (first < last) {
-        size_t middle = first + (last - first) / 2;
-        if (summaries[middle]->prefix_sum < target)
-            last = middle + 1;
-        else
-            last = middle;
-    }
-    if (first == cur_size) return NPOSLL;
-    return first;
-}
-
 Vector<PageSegment> Queue::find_index_segments(uint64_t msg_offset, uint64_t& msg_num) const {
-    size_t first_idx = binary_search(summaries_, msg_offset);
-    if (first_idx == NPOSLL) return Vector<PageSegment>();
-    size_t last_idx = binary_search(summaries_, msg_offset + msg_num - 1);
+    size_t first_idx = msg_offset / MAX_INDEX_ENTRIES_IN_PAGE;
+    if (first_idx >= summaries_.size()) return Vector<PageSegment>();
+    size_t last_idx = (msg_offset + msg_num - 1) / MAX_INDEX_ENTRIES_IN_PAGE;
 
     Vector<PageSegment> segments;
     for (auto it = first_idx; it <= last_idx; ++it) {
-        segments.push_back(generate_page_segment_from(summaries_[it], msg_offset, msg_num));
+        segments.push_back(generate_page_segment_from(summaries_[it], it, msg_offset, msg_num));
     }
 
     return segments;

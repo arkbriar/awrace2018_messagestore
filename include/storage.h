@@ -50,7 +50,6 @@ struct __attribute__((__packed__)) IndexEntry {
 
 struct __attribute__((__packed__)) IndexPageSummary {
     uint64_t page_offset;
-    uint64_t prefix_sum = 0;
     volatile uint16_t size = 0;
     uint16_t write_offset = 0;
 };
@@ -142,7 +141,7 @@ public:
                   return std::make_shared<FilePagePtr>(this->allocate_new_page(offset));
               },
               cache_capacity) {
-        fd_ = ::open(file.c_str(), O_RDWR | O_CREAT);
+        fd_ = ::open(file.c_str(), O_RDWR | O_CREAT, 0644);
         assert(fd_ > 0);
         file_size_ = read_file_size(fd_);
     }

@@ -15,6 +15,7 @@
 // tbb
 #include <tbb/concurrent_hash_map.h>
 #include <tbb/concurrent_vector.h>
+#define TBB_PREVIEW_CONCURRENT_LRU_CACHE 1
 #include <tbb/concurrent_lru_cache.h>
 
 #include "logger.h"
