@@ -15,8 +15,7 @@
 // tbb
 #include <tbb/concurrent_hash_map.h>
 #include <tbb/concurrent_vector.h>
-// patch concurrent lru cache for tbb 3.2
-#include "tbbpatch/concurrent_lru_cache.h"
+#include <tbb/concurrent_lru_cache.h>
 
 #include "logger.h"
 
