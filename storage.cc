@@ -25,7 +25,7 @@ uint64_t Queue::allocate_new_page(PagedFile* file, Atomic<uint64_t>& offset, boo
 
 // not thread safe
 uint64_t Queue::allocate_index_slot(IndexPageSummary& summary) {
-    if (summary.write_offset + sizeof(IndexEntry) < FILE_PAGE_SIZE) {
+    if (summary.write_offset + sizeof(IndexEntry) <= FILE_PAGE_AVALIABLE_SIZE) {
         uint16_t slot_off = summary.write_offset;
         summary.write_offset += sizeof(IndexEntry);
         return slot_off;
@@ -51,7 +51,7 @@ void Queue::allocate_next_index_slot(uint64_t& page_off, uint64_t& slot_off) {
         slot_off = allocate_index_slot(const_cast<IndexPageSummary&>(it->second));
         if (allocated) {
             summaries_.push_back(&it->second);
-            index_page_num_.fetch_add(1);
+            ++index_page_num_;
         }
     }
 }
@@ -59,15 +59,15 @@ void Queue::allocate_next_index_slot(uint64_t& page_off, uint64_t& slot_off) {
 // not thread safe
 void Queue::allocate_next_data_slot(uint64_t& page_off, uint64_t& slot_off, uint16_t size) {
     page_off = cur_data_page_idx_.load();
-    slot_off = cur_data_slot_off_.load() + size;
+    slot_off = cur_data_slot_off_.fetch_add(size);
 
     // current data slot is full, allocate next page
-    if (page_off == NEGATIVE_OFFSET || slot_off >= FILE_PAGE_AVALIABLE_SIZE) {
+    if (page_off == NEGATIVE_OFFSET || slot_off + size > FILE_PAGE_AVALIABLE_SIZE) {
         bool allocated = false;
         page_off = allocate_new_page(data_file_, page_off, cur_data_page_idx_, allocated);
         cur_data_slot_off_.store(size);
-        slot_off = size;
-        if (allocated) data_page_num_.fetch_add(1);
+        slot_off = 0;
+        if (allocated) ++data_page_num_;
     }
 }
 
@@ -78,10 +78,12 @@ void Queue::put(const MemBlock& message) {
     allocate_next_index_slot(idx_off, idx_slot_off);
 
     // compress message and set msg_ptr and msg_size
-    char msg_buf[LZ4_COMPRESSBOUND(2048)];
-    size_t msg_size =
-        LZ4_compress_default((const char*)(message.ptr), msg_buf, message.size, sizeof(msg_buf));
-    void* msg_ptr = (void*)msg_buf;
+    /* char msg_buf[LZ4_COMPRESSBOUND(2048)];
+     * size_t msg_size =
+     *     LZ4_compress_default((const char*)(message.ptr), msg_buf, message.size, sizeof(msg_buf));
+     * void* msg_ptr = (void*)msg_buf; */
+    size_t msg_size = message.size;
+    void* msg_ptr = message.ptr;
 
     // find current active data page and allocate payload slot
     uint64_t data_off, data_slot_off;
@@ -103,7 +105,7 @@ void Queue::put(const MemBlock& message) {
     back_ptr->size++;
 
     // update statistics
-    message_num_.fetch_add(1);
+    ++message_num_;
 }
 
 PageSegment generate_page_segment_from(const IndexPageSummary* summary, size_t idx,
@@ -152,11 +154,15 @@ Vector<MemBlock> Queue::get(long offset, long number) const {
         // for each index entry, read message
         data_file_->raw_read_and_handle(entry.offset, [&entry, &messages](const char* ptr) {
             MemBlock block;
-            block.ptr = (void*)(new uint8_t[entry.raw_length]);
+            block.ptr = (void*)(new uint8_t[entry.raw_length + 1]);
             block.size = entry.raw_length;
 
             // decompress message to block
-            LZ4_decompress_safe(ptr, (char*)block.ptr, entry.length, entry.raw_length);
+            /* int decompressed_size =
+             *     LZ4_decompress_safe(ptr, (char*)block.ptr, entry.length, entry.raw_length);
+             * assert(decompressed_size > 0 && decompressed_size == block.size); */
+            memcpy(block.ptr, ptr, block.size);
+            ((char*)block.ptr)[block.size] = '\0';
             messages.push_back(std::move(block));
         });
     });

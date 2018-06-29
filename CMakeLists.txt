@@ -28,6 +28,7 @@ target_link_libraries(queue_race snappy)
 #target_link_libraries(queue_race z)
 
 add_subdirectory(example)
+add_subdirectory(benchmark)
 
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/
         DESTINATION include)

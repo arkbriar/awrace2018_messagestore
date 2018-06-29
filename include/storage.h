@@ -54,9 +54,9 @@ struct __attribute__((__packed__)) IndexPageSummary {
     uint16_t write_offset = 0;
 };
 
-#define ONE_TERA_BYTES (1024ULL * 1024ULL * 1024ULL * 1024ULL)
+#define ONE_TERA_BYTES (1024ULL * 1024ULL * 1024ULL * 1024ULL * 1024ULL)
 // Maximum one tera bytes pages
-#define PAGE_OFFSET_LIMIT (ONE_TERA_BYTES / FILE_PAGE_SIZE)
+#define PAGE_OFFSET_LIMIT ONE_TERA_BYTES
 
 template <class T>
 union ReadWriter {
@@ -163,7 +163,7 @@ protected:
 
 public:
     void raw_read_and_handle(uint64_t page_offset, uint16_t slot_offset,
-                             const PtrHandleFunc<char>& handle_func) {
+                             const PtrHandleFunc<char>& handle_func) const {
         page_offset = FILE_PAGE_OFFSET_OF(page_offset);
         assert(page_offset < PAGE_OFFSET_LIMIT);
         auto cache_handle = cache_[page_offset];
@@ -171,14 +171,14 @@ public:
         handle_func((const char*)(page->content + slot_offset));
     }
 
-    void raw_read_and_handle(uint64_t offset, const PtrHandleFunc<char>& handle_func) {
+    void raw_read_and_handle(uint64_t offset, const PtrHandleFunc<char>& handle_func) const {
         uint16_t slot_offset = offset & (FILE_PAGE_SIZE - 1);
         offset -= slot_offset;
         this->raw_read_and_handle(offset, slot_offset, handle_func);
     }
 
     template <class T>
-    void read_and_handle(uint64_t offset, const RefHandleFunc<T>& handle_func) {
+    void read_and_handle(uint64_t offset, const RefHandleFunc<T>& handle_func) const {
         uint16_t slot_offset = offset & (FILE_PAGE_SIZE - 1);
         offset -= slot_offset;
         this->read_and_handle<T>(offset, slot_offset, handle_func);
@@ -186,22 +186,23 @@ public:
 
     template <class T>
     void read_and_handle(uint64_t page_offset, uint16_t slot_offset,
-                         const RefHandleFunc<T>& handle_func) {
+                         const RefHandleFunc<T>& handle_func) const {
         page_offset = FILE_PAGE_OFFSET_OF(page_offset);
         assert(page_offset < PAGE_OFFSET_LIMIT &&
-               slot_offset + sizeof(T) < FILE_PAGE_AVALIABLE_SIZE);
+               slot_offset + sizeof(T) <= FILE_PAGE_AVALIABLE_SIZE);
         auto cache_handle = cache_[page_offset];
         FilePagePtr& page = *cache_handle.value();
         single_read_and_handle<T>((const void*)(page->content + slot_offset), handle_func);
     }
 
     template <class T>
-    void read_and_handle(const Vector<PageSegment>& segments, const RefHandleFunc<T>& handle_func) {
+    void read_and_handle(const Vector<PageSegment>& segments,
+                         const RefHandleFunc<T>& handle_func) const {
         for (auto& seg : segments) {
             if (seg.end_slot_offset <= seg.start_slot_offset) continue;
             uint64_t page_offset = FILE_PAGE_OFFSET_OF(seg.page_offset);
             assert(page_offset < PAGE_OFFSET_LIMIT &&
-                   seg.start_slot_offset + sizeof(T) < FILE_PAGE_AVALIABLE_SIZE);
+                   seg.start_slot_offset + sizeof(T) <= FILE_PAGE_AVALIABLE_SIZE);
             size_t obj_size = (seg.end_slot_offset - seg.start_slot_offset) / sizeof(T);
             if (obj_size == 0) continue;
             auto cache_handle = cache_[page_offset];
@@ -216,7 +217,7 @@ public:
         page_offset = FILE_PAGE_OFFSET_OF(page_offset);
 
         assert(page_offset < PAGE_OFFSET_LIMIT &&
-               slot_offset + sizeof(T) < FILE_PAGE_AVALIABLE_SIZE);
+               slot_offset + sizeof(T) <= FILE_PAGE_AVALIABLE_SIZE);
 
         auto cache_handle = cache_[page_offset];
         FilePagePtr& page = *cache_handle.value();
@@ -226,7 +227,7 @@ public:
     void write_to_page(const void* data, size_t size, uint64_t page_offset, uint16_t slot_offset) {
         page_offset = FILE_PAGE_OFFSET_OF(page_offset);
 
-        assert(page_offset < PAGE_OFFSET_LIMIT && slot_offset + size < FILE_PAGE_AVALIABLE_SIZE);
+        assert(page_offset < PAGE_OFFSET_LIMIT && slot_offset + size <= FILE_PAGE_AVALIABLE_SIZE);
         auto cache_handle = cache_[page_offset];
         FilePagePtr& page = *cache_handle.value();
         memcpy(page->content + slot_offset, data, size);
@@ -245,7 +246,7 @@ private:
     size_t file_size_;
     String file_;
     Atomic<uint64_t> next_page_offset_{0};
-    ConcurrentLruCache<uint64_t, SharedPtr<FilePagePtr>> cache_;
+    mutable ConcurrentLruCache<uint64_t, SharedPtr<FilePagePtr>> cache_;
 };
 
 #define NPOSLL uint64_t(-1LL)
@@ -290,9 +291,9 @@ private:
 
     // Statistics, they are not accurate at some timepoint,
     // so use them just as hints.
-    Atomic<uint64_t> message_num_{0};
-    Atomic<uint64_t> index_page_num_{0};
-    Atomic<uint64_t> data_page_num_{0};
+    uint64_t message_num_ = 0;
+    uint64_t index_page_num_ = 0;
+    uint64_t data_page_num_ = 0;
 
     // Summaries for reader and writer, as there are at most
     // 1 writer, thread safety is guaranteed by atomic cursors below
@@ -304,7 +305,7 @@ private:
     Atomic<uint64_t> cur_data_page_idx_{NEGATIVE_OFFSET};
     Atomic<uint64_t> cur_data_slot_off_{0};
 
-    mutable PagedFile *index_file_, *data_file_;
+    PagedFile *index_file_, *data_file_;
 };
 
 class QueueStore {
