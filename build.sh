@@ -6,14 +6,14 @@ set -ev
 CmakeBinary=$(command -v cmake)
 MakeBinary=$(command -v make)
 CoreNum=$(getconf _NPROCESSORS_ONLN)
-BuildType=Debug
+BuildType="Debug"
 
 # Enable case insensitive string match
 shopt -s nocasematch
 # Read build type
 if [[ $# -gt 0 ]]; then
-    if [ "$1" = "Release" ]; then BuildType="Release";
-    elif [ "$1" != "Debug" ]; then printf "Unrecognized build type: %s" $1; fi
+    if [ "$1" = "release" ]; then BuildType="Release";
+    elif [ "$1" != "debug" ]; then printf "Unrecognized build type: %s" $1; fi
 fi
 
 # Create build directory and switch to it

@@ -148,7 +148,7 @@ public:
     ~PagedFile() { ::close(fd_); }
 
 protected:
-    bool ensure_file_size(uint64_t size) { return ::ftruncate(fd_, size); }
+    bool ensure_file_size(uint64_t size) { return ::ftruncate(fd_, size) == 0; }
 
     FilePage* allocate_new_page(uint64_t offset) {
         void* address =
@@ -236,7 +236,7 @@ public:
     uint64_t next_page_offset() {
         uint64_t offset = next_page_offset_.fetch_add(FILE_PAGE_SIZE);
         if (offset >= file_size_) {
-            ensure_file_size(file_size_ = offset + 1000 * FILE_PAGE_SIZE);
+            ensure_file_size(file_size_ = offset + 10000 * FILE_PAGE_SIZE);
         }
         return offset;
     }
