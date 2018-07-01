@@ -102,6 +102,18 @@ void batch_read_and_handle(const void* src, size_t size, const RefHandleFunc<T>&
     }
 }
 
+template <class T, typename = std::enable_if<std::is_integral<T>::value>>
+class SteppedValue {
+public:
+    SteppedValue(T step) : SteppedValue(T{}, step) {}
+    SteppedValue(T value, T step) : value_(value), step_(step) {}
+    T next() { return value_.fetch_add(step_); }
+
+private:
+    const T step_;
+    Atomic<T> value_;
+};
+
 class FilePagePtr {
 public:
     FilePagePtr() : FilePagePtr(nullptr) {}
@@ -234,7 +246,7 @@ public:
     }
 
     uint64_t next_page_offset() {
-        uint64_t offset = next_page_offset_.fetch_add(FILE_PAGE_SIZE);
+        uint64_t offset = page_offset_generator_.next();
         if (offset >= file_size_) {
             ensure_file_size(file_size_ = offset + 10000 * FILE_PAGE_SIZE);
         }
@@ -245,7 +257,7 @@ private:
     int fd_;
     size_t file_size_;
     String file_;
-    Atomic<uint64_t> next_page_offset_{0};
+    SteppedValue<uint64_t> page_offset_generator_{FILE_PAGE_SIZE};
     mutable ConcurrentLruCache<uint64_t, SharedPtr<FilePagePtr>> cache_;
 };
 
@@ -256,18 +268,13 @@ private:
 class QueueStore;
 class Queue {
 public:
-    Queue() {}
-    explicit Queue(uint32_t queue_id, const String& queue_name)
-        : queue_id_(queue_id), queue_name_(queue_name) {}
+    explicit Queue(PagedFile* index_file, PagedFile* data_file)
+        : index_file_(index_file), data_file_(data_file) {}
 
     uint32_t get_queue_id() const { return this->queue_id_; }
     const String& get_queue_name() const { return this->queue_name_; }
     void set_queue_id(uint32_t queue_id) { this->queue_id_ = queue_id; }
     void set_queue_name(const String& queue_name) { this->queue_name_ = queue_name; }
-    void set_files(PagedFile* index_file, PagedFile* data_file) {
-        this->index_file_ = index_file;
-        this->data_file_ = data_file;
-    }
 
     void put(const MemBlock& message);
     Vector<MemBlock> get(long offset, long number) const;
@@ -286,7 +293,7 @@ protected:
     Vector<PageSegment> find_index_segments(uint64_t msg_offset, uint64_t& msg_num) const;
 
 private:
-    uint32_t queue_id_;
+    uint32_t queue_id_ = -1;
     String queue_name_;
 
     // Statistics, they are not accurate at some timepoint,
@@ -297,7 +304,7 @@ private:
 
     // Summaries for reader and writer, as there are at most
     // 1 writer, thread safety is guaranteed by atomic cursors below
-    ConcurrentHashMap<uint64_t, IndexPageSummary> summary_map_;
+    ConcurrentUnorderedMap<uint64_t, IndexPageSummary> summary_map_;
     ConcurrentVector<const IndexPageSummary*> summaries_;
 
     // Atomic cursors for writing data
@@ -317,17 +324,17 @@ public:
     ~QueueStore() {}
 
     void put(const String& queue_name, const MemBlock& message);
-
-    Vector<MemBlock> get(const String& queue_name, long offset, long number);
+    Vector<MemBlock> get(const String& queue_name, long offset, long size);
 
 protected:
-    uint32_t next_queue_id() { return next_queue_id_.fetch_add(1); }
+    SharedPtr<Queue> find_or_create_queue(const String& queue_name);
+    SharedPtr<Queue> find_queue(const String& queue_name) const;
 
 private:
     String location_;
     PagedFile index_file_, data_file_;
-    Atomic<uint32_t> next_queue_id_{0};
-    ConcurrentHashMap<String, SharedPtr<Queue>> queues_;
+    SteppedValue<uint32_t> queue_id_generator_{1};
+    ConcurrentUnorderedMap<String, SharedPtr<Queue>> queues_;
 };
 
 }  // namespace race2018

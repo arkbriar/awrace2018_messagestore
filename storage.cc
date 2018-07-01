@@ -36,19 +36,23 @@ uint64_t Queue::allocate_index_slot(IndexPageSummary& summary) {
 // not thread safe
 void Queue::allocate_next_index_slot(uint64_t& page_off, uint64_t& slot_off) {
     page_off = cur_index_page_idx_.load();
-    ConstConcurrentHashMapAccessor<uint64_t, IndexPageSummary> it;
-    summary_map_.find(it, page_off);
-    if (!it.empty()) slot_off = allocate_index_slot(const_cast<IndexPageSummary&>(it->second));
+    auto it = summary_map_.find(page_off);
+    if (it != summary_map_.end()) {
+        slot_off = allocate_index_slot(it->second);
+    } else {
+        slot_off = NEGATIVE_OFFSET;
+    }
 
     // current index slot is full, allocate next page
-    if (page_off == NEGATIVE_OFFSET || it.empty() || slot_off == NEGATIVE_OFFSET) {
+    if (page_off == NEGATIVE_OFFSET || slot_off == NEGATIVE_OFFSET) {
         bool allocated = false;
         page_off = allocate_new_page(index_file_, page_off, cur_index_page_idx_, allocated);
         // concurrent insert, this will not cause replacing, refer to ttb's doc
         IndexPageSummary index_page_summary;
         index_page_summary.page_offset = page_off;
-        summary_map_.insert(it, std::make_pair(page_off, index_page_summary));
-        slot_off = allocate_index_slot(const_cast<IndexPageSummary&>(it->second));
+        auto it_res = summary_map_.insert(std::make_pair(page_off, index_page_summary));
+        it = it_res.first;
+        slot_off = allocate_index_slot(it->second);
         if (allocated) {
             summaries_.push_back(&it->second);
             ++index_page_num_;
@@ -170,33 +174,39 @@ Vector<MemBlock> Queue::get(long offset, long number) const {
     return messages;
 }
 
-void QueueStore::put(const String& queue_name, const MemBlock& message) {
-    ConstConcurrentHashMapAccessor<String, SharedPtr<Queue>> it;
-    SharedPtr<Queue> queue_ptr = std::make_shared<Queue>();
-    if (queues_.insert(it, std::make_pair(queue_name, queue_ptr))) {
-        // create a new queue
-        auto& q = const_cast<SharedPtr<Queue>&>(it->second);
-        q->set_queue_id(next_queue_id());
-        q->set_queue_name(queue_name);
-        q->set_files(&index_file_, &data_file_);
+SharedPtr<Queue> QueueStore::find_or_create_queue(const String& queue_name) {
+    auto it = queues_.find(queue_name);
+    if (it == queues_.end()) {
+        SharedPtr<Queue> queue_ptr = std::make_shared<Queue>(&index_file_, &data_file_);
+        auto it_res = queues_.insert(std::make_pair(queue_name, std::move(queue_ptr)));
+        it = it_res.first;
+        if (it_res.second) {  // creates a new queue
+            auto& q = it->second;
+            q->set_queue_id(queue_id_generator_.next());
+            q->set_queue_name(queue_name);
 
-        DLOG("Created a new queue, id: %d, name: %s", q.get_queue_id(), q.get_queue_name().c_str());
+            DLOG("Created a new queue, id: %d, name: %s", q.get_queue_id(),
+                 q.get_queue_name().c_str());
+        }
     }
+    return it->second;
+}
 
-    // put into queue
-    auto& q = const_cast<SharedPtr<Queue>&>(it->second);
-    q->put(message);
+SharedPtr<Queue> QueueStore::find_queue(const String& queue_name) const {
+    auto it = queues_.find(queue_name);
+    return it == queues_.end() ? nullptr : it->second;
+}
 
+void QueueStore::put(const String& queue_name, const MemBlock& message) {
+    auto q_ptr = find_or_create_queue(queue_name);
+    q_ptr->put(message);
     // free MemBlock
     free(message.ptr);
 }
 
-Vector<MemBlock> QueueStore::get(const String& queue_name, long offset, long number) {
-    ConstConcurrentHashMapAccessor<String, SharedPtr<Queue>> it;
-    if (queues_.find(it, queue_name)) {
-        auto& q = it->second;
-        return q->get(offset, number);
-    }
+Vector<MemBlock> QueueStore::get(const String& queue_name, long offset, long size) {
+    auto q_ptr = find_queue(queue_name);
+    if (q_ptr) return q_ptr->get(offset, size);
     // return empty list when not found
     return Vector<MemBlock>();
 }
