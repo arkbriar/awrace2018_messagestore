@@ -15,7 +15,7 @@ random_device rd;
 uniform_int_distribution<int> dist(50, 64);
 
 const int QUEUE_NUM = 10000;
-const int MESSAGE_NUM = 200;
+const int MESSAGE_NUM = 2000;
 
 void generate_random_string(char *dest, int len) {
     static const char alphanum[] =
