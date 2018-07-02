@@ -53,8 +53,8 @@ template <class K, class V>
 using ConcurrentUnorderedMap = tbb::concurrent_unordered_map<K, V>;
 template <class T>
 using ConcurrentVector = tbb::concurrent_vector<T>;
-template <class K, class V>
-using ConcurrentLruCache = tbb::concurrent_lru_cache<K, V, typename std::function<V(K)>>;
+// template <class K, class V>
+// using ConcurrentLruCache = tbb::concurrent_lru_cache<K, V, typename std::function<V(K)>>;
 }  // namespace race2018
 
 #endif  // QUEUE_RACE_COMMON_H

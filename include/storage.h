@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <cerrno>
 
+#include "cache/concurrent-scalable-cache.h"
 #include "common.h"
 
 namespace race2018 {
@@ -22,13 +23,13 @@ struct MemBlock {
     size_t size;
 };
 
-#define FILE_PAGE_SIZE (16 * 1024)  // 16 kilo bytes
+#define FILE_PAGE_SIZE (4096)  // 4 kilo bytes
 #define FILE_PAGE_OFFSET_OF(offset) (offset - (offset & (FILE_PAGE_SIZE - 1)))
 
 struct __attribute__((__packed__)) FilePageHeader {
-    uint32_t queue_id;
-    // prev, next page offset
-    uint64_t prev, next;
+    // uint32_t queue_id;
+    // // prev, next page offset
+    // uint64_t prev, next;
 };
 
 #define FILE_PAGE_HEADER_SIZE sizeof(FilePageHeader)
@@ -122,14 +123,16 @@ public:
         if (file_page_ != nullptr) munmap(file_page_, FILE_PAGE_SIZE);
     }
 
+    void set_file_page(FilePage* file_page) { this->file_page_ = file_page; }
     FilePage& operator*() const noexcept { return *file_page_; }
     FilePage* operator->() const noexcept { return file_page_; }
     explicit operator bool() const noexcept { return file_page_ != nullptr; }
+    bool empty() const noexcept { return file_page_ == nullptr; }
     FilePage* get() const noexcept { return file_page_; }
     FilePagePtr& operator=(const FilePagePtr&) = delete;
 
 private:
-    FilePage* file_page_;
+    volatile FilePage* file_page_;
 };
 
 struct PageSegment {
@@ -146,13 +149,7 @@ static size_t read_file_size(int fd) {
 
 class PagedFile {
 public:
-    PagedFile(const String& file, size_t cache_capacity)
-        : file_(file),
-          cache_(
-              [this](uint64_t offset) {
-                  return std::make_shared<FilePagePtr>(this->allocate_new_page(offset));
-              },
-              cache_capacity) {
+    PagedFile(const String& file, size_t cache_capacity) : file_(file), cache_(cache_capacity, 32) {
         fd_ = ::open(file.c_str(), O_RDWR | O_CREAT, 0644);
         assert(fd_ > 0);
         file_size_ = read_file_size(fd_);
@@ -173,13 +170,33 @@ protected:
         return reinterpret_cast<FilePage*>(address);
     }
 
+    using CacheAccessor = ConcurrentScalableCache<uint64_t, SharedPtr<FilePagePtr>>::ConstAccessor;
+    bool find_or_create(CacheAccessor& ac, uint64_t page_offset) {
+        bool created = false;
+        if (!cache_.find(ac, page_offset)) {
+            auto page_ptr = std::make_shared<FilePagePtr>();
+            if (cache_.insert(ac, page_offset, page_ptr)) {
+                created = true;
+                page_ptr->set_file_page(allocate_new_page(offset));
+            }
+        }
+        assert(!ac.empty());
+        // spin wait until file page ptr is valid
+        auto& page_shared_ptr = *ac;
+        while (page_shared_ptr->empty()) {
+        }
+        return created;
+    }
+
 public:
     void raw_read_and_handle(uint64_t page_offset, uint16_t slot_offset,
                              const PtrHandleFunc<char>& handle_func) const {
         page_offset = FILE_PAGE_OFFSET_OF(page_offset);
         assert(page_offset < PAGE_OFFSET_LIMIT);
-        auto cache_handle = cache_[page_offset];
-        FilePagePtr& page = *cache_handle.value();
+
+        CacheAccessor ac;
+        find_or_create(ac, page_offset);
+        auto& page = **ac;
         handle_func((const char*)(page->content + slot_offset));
     }
 
@@ -202,8 +219,10 @@ public:
         page_offset = FILE_PAGE_OFFSET_OF(page_offset);
         assert(page_offset < PAGE_OFFSET_LIMIT &&
                slot_offset + sizeof(T) <= FILE_PAGE_AVALIABLE_SIZE);
-        auto cache_handle = cache_[page_offset];
-        FilePagePtr& page = *cache_handle.value();
+
+        CacheAccessor ac;
+        find_or_create(ac, page_offset);
+        auto& page = **ac;
         single_read_and_handle<T>((const void*)(page->content + slot_offset), handle_func);
     }
 
@@ -217,8 +236,9 @@ public:
                    seg.start_slot_offset + sizeof(T) <= FILE_PAGE_AVALIABLE_SIZE);
             size_t obj_size = (seg.end_slot_offset - seg.start_slot_offset) / sizeof(T);
             if (obj_size == 0) continue;
-            auto cache_handle = cache_[page_offset];
-            FilePagePtr& page = *cache_handle.value();
+            CacheAccessor ac;
+            find_or_create(ac, page_offset);
+            auto& page = **ac;
             batch_read_and_handle<T>((const void*)(page->content + seg.start_slot_offset), obj_size,
                                      handle_func);
         }
@@ -227,21 +247,22 @@ public:
     template <class T>
     void write_to_page(const T& data, uint64_t page_offset, uint16_t slot_offset) {
         page_offset = FILE_PAGE_OFFSET_OF(page_offset);
-
         assert(page_offset < PAGE_OFFSET_LIMIT &&
                slot_offset + sizeof(T) <= FILE_PAGE_AVALIABLE_SIZE);
 
-        auto cache_handle = cache_[page_offset];
-        FilePagePtr& page = *cache_handle.value();
+        CacheAccessor ac;
+        find_or_create(ac, page_offset);
+        auto& page = **ac;
         write_to_buf(page->content + slot_offset, data);
     }
 
     void write_to_page(const void* data, size_t size, uint64_t page_offset, uint16_t slot_offset) {
         page_offset = FILE_PAGE_OFFSET_OF(page_offset);
-
         assert(page_offset < PAGE_OFFSET_LIMIT && slot_offset + size <= FILE_PAGE_AVALIABLE_SIZE);
-        auto cache_handle = cache_[page_offset];
-        FilePagePtr& page = *cache_handle.value();
+
+        CacheAccessor ac;
+        find_or_create(ac, page_offset);
+        auto& page = **ac;
         memcpy(page->content + slot_offset, data, size);
     }
 
@@ -258,7 +279,7 @@ private:
     size_t file_size_;
     String file_;
     SteppedValue<uint64_t> page_offset_generator_{FILE_PAGE_SIZE};
-    mutable ConcurrentLruCache<uint64_t, SharedPtr<FilePagePtr>> cache_;
+    mutable ConcurrentScalableCache<uint64_t, SharedPtr<FilePagePtr>> cache_;
 };
 
 #define NPOSLL uint64_t(-1LL)
@@ -315,12 +336,17 @@ private:
     PagedFile *index_file_, *data_file_;
 };
 
+#define GIGA_BYTES(n) ((uint64_t(n)) << 30)
+#define NUM_INDEX_PAGES(n) ((uint64_t)n / 6ULL)
+#define NUM_DATA_PAGES(n) ((uint64_t)n * 5 / 6ULL)
+#define PAGES_OF_SIX_GIGA_BYTES (GIGA_BYTES(6) / FILE_PAGE_SIZE)
+
 class QueueStore {
 public:
     QueueStore(const String& location)
         : location_(location),
-          index_file_(location + "/" + "index.data", 3000),
-          data_file_(location + "/" + "messages.data", 262144) {}
+          index_file_(location + "/" + "index.data", NUM_INDEX_PAGES(PAGES_OF_SIX_GIGA_BYTES)),
+          data_file_(location + "/" + "messages.data", NUM_DATA_PAGES(PAGES_OF_SIX_GIGA_BYTES)) {}
     ~QueueStore() {}
 
     void put(const String& queue_name, const MemBlock& message);
