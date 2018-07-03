@@ -13,17 +13,17 @@ using namespace std;
 using namespace race2018;
 
 //发送阶段的发送数量，也即发送阶段必须要在规定时间内把这些消息发送完毕方可
-int msgNum = 20000000;
+int msgNum = 100000000;
 //队列的数量
-const int queueNum = 10000;
+const int queueNum = 50000;
 
 //每个队列发送的数据量
 const int queueMsgNum = msgNum / queueNum;
 
 //正确性检测的次数
-const int checkNum = 10000;
+const int checkNum = 50000;
 //消费阶段的总队列数量
-const int checkQueueNum = 10000;
+const int checkQueueNum = 50000;
 //发送的线程数量
 const int sendTsNum = 10;
 //消费的线程数量
