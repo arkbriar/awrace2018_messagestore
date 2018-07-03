@@ -184,23 +184,34 @@ Vector<MemBlock> MessageQueue::get(long offset, long number) const {
     while (!entries.empty()) {
         // for each data page, load messages
         uint64_t page_offset = FILE_PAGE_OFFSET_OF(entries.front().offset);
-        data_file_->read_and_handle(page_offset, [page_offset, &messages,
-                                                  &entries](FilePagePtr& ptr) {
-            while (!entries.empty() && FILE_PAGE_OFFSET_OF(entries.front().offset) == page_offset) {
-                auto& entry = entries.front();
+        uint16_t start_slot_offset = SLOT_OFFSET_OF(entries.front().offset);
+        uint16_t size = 0;
+        Queue<IndexEntry> entries_in_page;
 
-                // load and copy message
-                MemBlock block;
-                block.ptr = (void*)(new uint8_t[entry.raw_length + 1]);
-                block.size = entry.raw_length;
+        while (!entries.empty() && FILE_PAGE_OFFSET_OF(entries.front().offset) == page_offset) {
+            auto& entry = entries.front();
+            size = SLOT_OFFSET_OF(entry.offset) - start_slot_offset + entry.length;
+            entries_in_page.push(entry);
+            entries.pop();
+        }
 
-                memcpy(block.ptr, ptr->content + SLOT_OFFSET_OF(entry.offset), block.size);
-                ((char*)block.ptr)[block.size] = '\0';
-                messages.push_back(std::move(block));
+        data_file_->read_and_handle(
+            page_offset, start_slot_offset, size, [&messages, &entries_in_page](FilePagePtr& ptr) {
+                while (!entries_in_page.empty()) {
+                    auto& entry = entries_in_page.front();
 
-                entries.pop();
-            }
-        });
+                    // load and copy message
+                    MemBlock block;
+                    block.ptr = (void*)(new uint8_t[entry.raw_length + 1]);
+                    block.size = entry.raw_length;
+
+                    memcpy(block.ptr, ptr->content + SLOT_OFFSET_OF(entry.offset), block.size);
+                    ((char*)block.ptr)[block.size] = '\0';
+                    messages.push_back(std::move(block));
+
+                    entries_in_page.pop();
+                }
+            });
     }
 
     return messages;

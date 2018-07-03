@@ -39,7 +39,7 @@ struct __attribute__((__packed__)) FilePageHeader {
 
 struct __attribute__((__packed__)) FilePage {
     FilePageHeader header;
-    uint8_t content[FILE_PAGE_AVALIABLE_SIZE];
+    char content[FILE_PAGE_AVALIABLE_SIZE];
 };
 
 struct __attribute__((__packed__)) IndexEntry {
@@ -178,20 +178,9 @@ protected:
         return reinterpret_cast<FilePage*>(address);
     }
 
-    /* using CacheAccessor = ConcurrentScalableCache<uint64_t,
-     * SharedPtr<FilePagePtr>>::ConstAccessor; bool find_or_create(CacheAccessor& ac, uint64_t
-     * page_offset) const { bool created = false; if (!cache_.find(ac, page_offset)) { auto page_ptr
-     * = std::make_shared<FilePagePtr>(); if (cache_.insert(ac, page_offset, page_ptr)) { created =
-     * true; page_ptr->set_file_page(allocate_new_page(page_offset));
-     *         }
-     *     }
-     *     assert(!ac.empty());
-     *     // spin wait until file page ptr is valid
-     *     auto& page_shared_ptr = *ac;
-     *     while (page_shared_ptr->empty()) {
-     *     }
-     *     return created;
-     * } */
+    static inline uint64_t file_offset_of(uint64_t page_offset, uint16_t slot_offset) {
+        return page_offset + slot_offset + FILE_PAGE_HEADER_SIZE;
+    }
 
 public:
     void raw_read_and_handle(uint64_t page_offset, uint16_t slot_offset,
@@ -209,13 +198,23 @@ public:
         this->raw_read_and_handle(offset, slot_offset, handle_func);
     }
 
-    void read_and_handle(uint64_t page_offset,
+    void read_and_handle(uint64_t page_offset, uint16_t slot_offset, uint16_t size,
                          const std::function<void(FilePagePtr& ptr)>& read_f) {
         page_offset = FILE_PAGE_OFFSET_OF(page_offset);
         assert(page_offset < PAGE_OFFSET_LIMIT);
 
-        FilePagePtr page(allocate_new_page(page_offset, true));
-        read_f(page);
+        if (size >= 3 * FILE_PAGE_SIZE / 4) {
+            FilePagePtr page(allocate_new_page(page_offset, true));
+            read_f(page);
+        } else {
+            char file_buf[FILE_PAGE_SIZE];
+            FilePagePtr page((FilePage*)file_buf);
+            ::pread(fd_, page->content + slot_offset, size,
+                    file_offset_of(page_offset, slot_offset));
+            read_f(page);
+            // remove this buffer to avoid munmap
+            page.set_file_page(nullptr);
+        }
     }
 
     template <class T>
@@ -293,7 +292,6 @@ private:
     size_t file_size_;
     String file_;
     SteppedValue<uint64_t> page_offset_generator_{FILE_PAGE_SIZE};
-    // mutable ConcurrentScalableCache<uint64_t, SharedPtr<FilePagePtr>> cache_;
 };
 
 #define NPOSLL uint64_t(-1LL)
