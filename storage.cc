@@ -79,7 +79,8 @@ MessageQueue::MessageQueue(PagedFile* data_file) : data_file_(data_file) {}
 
 uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_offset,
                                          uint16_t size) {
-    if (cur_data_page_off_ == NEGATIVE_OFFSET || cur_data_slot_off_ + size > FILE_PAGE_SIZE) {
+    if (cur_data_page_off_ == NEGATIVE_OFFSET ||
+        cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE) {
         uint64_t prev_data_page_off = cur_data_page_off_;
         page_offset = cur_data_page_off_ = data_file_->next_page_offset();
         slot_offset = 0;

@@ -35,11 +35,12 @@ void produce_messages(queue_store &store, int idx, int thread_num) {
         for (int i = idx; i < QUEUE_NUM; i += thread_num) {
             MemBlock msg;
             msg.size = 50 + rand() % 15;
-            msg.ptr = (char *)::malloc(msg.size);
+            msg.ptr = (char *)::malloc(msg.size + 1);
             int head_len = sprintf((char *)msg.ptr, "q%d-%d-", i, msg_idx);
             int msg_len = msg.size - head_len - 3;
             generate_random_string((char *)msg.ptr + head_len, msg_len);
             memcpy((char *)msg.ptr + head_len + msg_len, "-ed", 3);
+            *((char *)(msg.ptr) + msg.size) = '\0';
             // now msg is {queue name}-{idx}-{random message}-ed
             store.put("Queue-" + to_string(i), msg);
         }
