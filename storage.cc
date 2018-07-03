@@ -4,235 +4,246 @@
 
 namespace race2018 {
 
-// not thread safe
-uint16_t MessageQueue::allocate_index_slot(IndexPageSummary& summary) {
-    if (summary.write_offset + sizeof(IndexEntry) <= FILE_PAGE_AVALIABLE_SIZE) {
-        uint16_t slot_off = summary.write_offset;
-        summary.write_offset += sizeof(IndexEntry);
-        return slot_off;
-    }
-    return 65535;
-}
-
-// not thread safe
-bool MessageQueue::allocate_next_index_slot(uint64_t& page_off, uint16_t& slot_off) {
-    page_off = cur_index_page_idx_;
-    if (page_off != NEGATIVE_OFFSET) {
-        slot_off = allocate_index_slot(summaries_.back());
-    }
-
-    // current index slot is full, allocate next page
-    if (page_off == NEGATIVE_OFFSET || slot_off == 65535) {
-        cur_index_page_idx_ = page_off = index_file_->next_page_offset();
-        // concurrent insert, this will not cause replacing, refer to ttb's doc
-        IndexPageSummary index_page_summary;
-        index_page_summary.page_offset = page_off;
-        slot_off = allocate_index_slot(index_page_summary);
-        summaries_.push_back(index_page_summary);
-        ++index_page_num_;
-        return true;
-    }
-
-    return false;
-}
-
-// not thread safe
-bool MessageQueue::allocate_next_data_slot(uint64_t& page_off, uint16_t& slot_off, uint16_t size) {
-    page_off = cur_data_page_idx_;
-    if (cur_data_slot_off_ + size <= FILE_PAGE_AVALIABLE_SIZE) {
-        slot_off = cur_data_slot_off_;
-        cur_data_slot_off_ += size;
+void* map_file_page(int fd, size_t offset, bool readonly) {
+    void* addr;
+    if (readonly) {
+        addr = ::mmap(nullptr, FILE_PAGE_SIZE, PROT_READ, MAP_SHARED, fd, offset);
     } else {
-        slot_off = 65535;
+        addr = ::mmap(nullptr, FILE_PAGE_SIZE, PROT_READ | PROT_READ, MAP_SHARED, fd, offset);
     }
+    if (addr == MAP_FAILED) {
+        perror("mmap file failed");
+        return nullptr;
+    }
+    return addr;
+}
 
-    // current data slot is full, allocate next page
-    if (page_off == NEGATIVE_OFFSET || slot_off == 65535) {
-        cur_data_page_idx_ = page_off = data_file_->next_page_offset();
+void unmap_file_page(void* addr) {
+    if (addr == nullptr) return;
+    ::munmap(addr, FILE_PAGE_SIZE);
+}
+
+PagedFile::PagedFile(const String& file) : file_(file) {
+    fd_ = ::open(file.c_str(), O_RDWR | O_CREAT, 0644);
+    assert(fd_ > 0);
+    // read file size
+    struct stat s;
+    ::fstat(fd_, &s);
+    size_ = s.st_size;
+}
+
+PagedFile::~PagedFile() {
+    if (fd_ > 0) ::close(fd_);
+}
+
+void PagedFile::read(uint64_t offset, const FilePageReader& reader) {
+    FilePage page;
+    ssize_t ret = ::pread(fd_, (void*)&page, FILE_PAGE_SIZE, offset);
+    if (ret == -1) {
+        perror("read page failed");
+        return;
+    }
+    reader(page.content);
+}
+
+void PagedFile::write(uint64_t offset, const FilePageWriter& writer) {
+    FilePage page;
+    writer(page.content);
+    ssize_t ret = ::pwrite(fd_, (const void*)&page, FILE_PAGE_SIZE, offset);
+    if (ret == -1) perror("write page failed");
+}
+
+void PagedFile::mapped_read(uint64_t offset, const FilePageReader& reader) {
+    MappedFilePagePtr page_ptr(fd_, offset, true);
+    if (!page_ptr) {
+        LOG("fallback to pread");
+        read(offset, reader);
+    } else {
+        reader(page_ptr->content);
+    }
+}
+
+void PagedFile::mapped_write(uint64_t offset, const FilePageWriter& writer) {
+    MappedFilePagePtr page_ptr(fd_, offset, false);
+    if (!page_ptr) {
+        LOG("fallback to pwrite");
+        write(offset, writer);
+    } else {
+        writer(page_ptr->content);
+    }
+}
+
+uint64_t PagedFile::next_page_offset() { return page_offset.next(); }
+
+MessageQueue::MessageQueue(PagedFile* data_file) : data_file_(data_file) {}
+
+uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_offset,
+                                         uint16_t size) {
+    if (cur_data_page_off_ == NEGATIVE_OFFSET || cur_data_slot_off_ + size > FILE_PAGE_SIZE) {
+        uint64_t prev_data_page_off = cur_data_page_off_;
+        page_offset = cur_data_page_off_ = data_file_->next_page_offset();
+        slot_offset = 0;
         cur_data_slot_off_ = size;
-        slot_off = 0;
-        ++data_page_num_;
-        return true;
-    }
-
-    return false;
-}
-
-void MessageQueue::flush_all() const {
-    if (index_entries_.empty() && messages_.empty()) return;
-
-    std::unique_lock<std::mutex> lock(mutex_);
-    while (!index_entries_.empty()) {
-        flush_indices_of_page(index_entries_.front().page, false);
-    }
-    while (!messages_.empty()) {
-        flush_messages_of_page(messages_.front().page, false);
+        return prev_data_page_off;
+    } else {
+        page_offset = cur_data_page_off_;
+        slot_offset = cur_data_slot_off_;
+        cur_data_slot_off_ += size;
+        return cur_data_page_off_;
     }
 }
 
-void MessageQueue::flush_messages_of_last_page(bool lock) const {
-    if (messages_.empty()) return;
-    flush_messages_of_page(messages_.front().page, lock);
-}
+void MessageQueue::flush_write_queue(uint64_t page_offset) {
+    if (write_queue_.empty()) return;
 
-void MessageQueue::flush_indices_of_last_page(bool lock) const {
-    if (index_entries_.empty()) return;
-    flush_indices_of_page(index_entries_.front().page, lock);
-}
-
-void MessageQueue::flush_indices_of_page(uint64_t page_offset, bool lock) const {
-    if (index_entries_.empty() || index_entries_.front().page != page_offset) return;
-    if (lock) mutex_.lock();
-    index_file_->write_to_page(page_offset, [this, page_offset](FilePagePtr& ptr) {
-        while (!index_entries_.empty() && index_entries_.front().page == page_offset) {
-            auto& index = index_entries_.front();
-            write_to_buf(ptr->content + index.offset, index.entry);
-            index_entries_.pop();
+    std::unique_lock<std::mutex> lock(wq_mutex_);
+    // write all messages in this queue to page of page_offset
+    data_file_->write(page_offset, [this](char* ptr) {
+        while (!write_queue_.empty()) {
+            auto& msg = write_queue_.front();
+            memcpy(ptr, msg.ptr, msg.size);
+            ptr[msg.size] = '\0';
+            ptr += msg.size + 1;
+            ::free(msg.ptr);
+            write_queue_.pop();
         }
     });
-    if (lock) mutex_.unlock();
-}
-
-void MessageQueue::flush_messages_of_page(uint64_t page_offset, bool lock) const {
-    if (messages_.empty() || messages_.front().page != page_offset) return;
-    if (lock) mutex_.lock();
-    data_file_->write_to_page(page_offset, [this, page_offset](FilePagePtr& ptr) {
-        while (!messages_.empty() && messages_.front().page == page_offset) {
-            auto paged_msg = messages_.front();
-            memcpy(ptr->content + paged_msg.offset, paged_msg.msg.ptr, paged_msg.msg.size);
-            ::free(paged_msg.msg.ptr);
-            messages_.pop();
-        }
-    });
-    if (lock) mutex_.unlock();
 }
 
 // put is sequential to support index verification
 void MessageQueue::put(const MemBlock& message) {
-    // find current active index page and allocate index slot
-    PagedIndex index;
-    bool new_index_page = allocate_next_index_slot(index.page, index.offset);
+    uint16_t msg_size = message.size + 1;
 
-    // find current active data page and allocate payload slot
-    PagedMessage msg;
-    msg.msg = message;
-    bool new_data_page = allocate_next_data_slot(msg.page, msg.offset, message.size);
-    if (new_data_page) flush_messages_of_last_page();
-    messages_.push(msg);
+    uint64_t page_offset;
+    uint16_t slot_offset;
+    uint64_t prev_page_offset = next_message_slot(page_offset, slot_offset, msg_size);
+    if (prev_page_offset != page_offset) {
+        // a new data page is allocated
+        // flush messages of previous page
+        flush_write_queue(prev_page_offset);
 
-    // commit log to index slot, current active index page offset
-    // is @idx_off, current active index slot offset (in page) is
-    // @idx_slot_off
-    IndexEntry& index_entry = index.entry;
-    index_entry.offset = msg.page + msg.offset;
-    index_entry.raw_length = message.size;
-    index_entry.length = message.size;
-    if (new_index_page) flush_indices_of_last_page();
-    index_entries_.push(index);
-
-    // update index page summary
-    auto& last_idx = const_cast<IndexPageSummary&>(summaries_.back());
-    last_idx.size++;
-
-    // update statistics
-    ++message_num_;
-}
-
-PageSegment generate_page_segment_from(const IndexPageSummary& summary, size_t idx,
-                                       uint64_t& msg_offset, uint64_t& msg_num) {
-    assert(msg_num > 0);
-
-    PageSegment segment;
-    segment.page_offset = summary.page_offset;
-    segment.start_slot_offset =
-        (msg_offset - MAX_INDEX_ENTRIES_IN_PAGE * idx) * INDEX_ENTRY_SLOT_SIZE;
-    uint64_t num_this_seg = std::min(
-        uint64_t((summary.write_offset - segment.start_slot_offset) / INDEX_ENTRY_SLOT_SIZE),
-        msg_num);
-    segment.end_slot_offset = segment.start_slot_offset + num_this_seg * INDEX_ENTRY_SLOT_SIZE;
-
-    msg_offset += num_this_seg;
-    msg_num -= num_this_seg;
-    return segment;
-}
-
-Vector<PageSegment> MessageQueue::find_index_segments(uint64_t msg_offset,
-                                                      uint64_t& msg_num) const {
-    size_t first_idx = msg_offset / MAX_INDEX_ENTRIES_IN_PAGE;
-    if (first_idx >= summaries_.size()) return Vector<PageSegment>();
-    size_t last_idx = (msg_offset + msg_num - 1) / MAX_INDEX_ENTRIES_IN_PAGE;
-
-    Vector<PageSegment> segments;
-    for (auto it = first_idx; it <= last_idx; ++it) {
-        segments.push_back(generate_page_segment_from(summaries_[it], it, msg_offset, msg_num));
-    }
-
-    return segments;
-}
-
-Vector<MemBlock> MessageQueue::get(long offset, long number) const {
-    flush_all();
-
-    // find index pages
-    uint64_t left = number;
-    Vector<PageSegment> page_segs = find_index_segments(offset, left);
-    if (page_segs.empty()) return Vector<MemBlock>();
-    // get accurate message numbers
-    number -= left;
-
-    Vector<MemBlock> messages;
-    messages.reserve(number);
-
-    Queue<IndexEntry> entries;
-    index_file_->read_and_handle<IndexEntry>(
-        page_segs, [&entries](const IndexEntry& entry) { entries.push(entry); });
-
-    while (!entries.empty()) {
-        // for each data page, load messages
-        uint64_t page_offset = FILE_PAGE_OFFSET_OF(entries.front().offset);
-        uint16_t start_slot_offset = SLOT_OFFSET_OF(entries.front().offset);
-        uint16_t size = 0;
-        Queue<IndexEntry> entries_in_page;
-
-        while (!entries.empty() && FILE_PAGE_OFFSET_OF(entries.front().offset) == page_offset) {
-            auto& entry = entries.front();
-            size = SLOT_OFFSET_OF(entry.offset) - start_slot_offset + entry.length;
-            entries_in_page.push(entry);
-            entries.pop();
+        // create a new paged message index
+        uint64_t prev_total_msg_size = 0;
+        if (!paged_message_indices_.empty()) {
+            auto& prev_index = paged_message_indices_.back();
+            prev_total_msg_size = prev_index.total_msg_size();
         }
-
-        data_file_->read_and_handle(
-            page_offset, start_slot_offset, size, [&messages, &entries_in_page](FilePagePtr& ptr) {
-                while (!entries_in_page.empty()) {
-                    auto& entry = entries_in_page.front();
-
-                    // load and copy message
-                    MemBlock block;
-                    block.ptr = (void*)(new uint8_t[entry.raw_length + 1]);
-                    block.size = entry.raw_length;
-
-                    memcpy(block.ptr, ptr->content + SLOT_OFFSET_OF(entry.offset), block.size);
-                    ((char*)block.ptr)[block.size] = '\0';
-                    messages.push_back(std::move(block));
-
-                    entries_in_page.pop();
-                }
-            });
+        paged_message_indices_.emplace_back(page_offset, prev_total_msg_size);
     }
 
-    return messages;
+    // write message into write queue
+    write_queue_.push(message);
+
+    ++paged_message_indices_.back().msg_size;
 }
+
+size_t MessageQueue::binary_search_indices(uint64_t msg_offset) const {
+    size_t first = 0, last = paged_message_indices_.size();
+    while (first < last) {
+        size_t middle = first + (last - first) / 2;
+        if (paged_message_indices_[middle].total_msg_size() <= msg_offset) {
+            first = middle + 1;
+        } else {
+            last = middle;
+        }
+    }
+    return first;
+}
+
+void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, uint64_t& num,
+                             const char* ptr, Vector<MemBlock>& msgs) {
+    uint64_t cur_offset = index.prev_total_msg_size;
+    uint16_t size = index.msg_size;
+    if (offset >= cur_offset + size) return;
+
+    auto begin = ptr, end = ptr;
+
+    // skip to match offset
+    while (cur_offset != offset && size > 0) {
+        while (*end != '\0') ++end;
+        begin = ++end;
+        ++cur_offset, --size;
+    }
+
+    // read related messages to msgs
+    while (num > 0 && size > 0) {
+        while (*end != '\0') ++end;
+        assert(end > begin);
+        msgs.push_back(new_memblock(begin, end - begin + 1));
+        begin = ++end;
+        ++cur_offset, ++offset, --num, --size;
+    }
+
+    // read extra messagse to cache
+    /* while (size > 0) {
+     *     while (*end != '\0') ++end;
+     *     assert(end > begin);
+     *     read_cache_.push(cur_offset, new_memblock(begin, end - begin + 1));
+     *     begin = ++end;
+     *     ++cur_offset, --size;
+     * } */
+}
+
+Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
+    if (!write_queue_.empty()) flush_write_queue(cur_data_page_off_);
+
+    Vector<MemBlock> msgs;
+    // read messages from cache
+    /* if (offset == read_cache_.msg_offset_) {
+     *     msgs.reserve(std::min((size_t)number, read_cache_.size()));
+     *     MemBlock msg;
+     *     while (read_cache_.pop(msg) && number > 0) {
+     *         msgs.push_back(msg);
+     *         ++offset;
+     *         --number;
+     *     }
+     * }
+     * if (number == 0) return msgs; */
+
+    size_t first_page_idx = binary_search_indices(offset);
+
+    // messages from offset is not found
+    if (first_page_idx == paged_message_indices_.size()) {
+        return Vector<MemBlock>();
+    }
+
+    size_t last_page_idx = binary_search_indices(offset + number - 1);
+    if (last_page_idx == paged_message_indices_.size()) {
+        --last_page_idx;
+    }
+
+    uint64_t available_size =
+        std::min(offset + number, paged_message_indices_[last_page_idx].total_msg_size()) -
+        std::max(offset, paged_message_indices_[first_page_idx].prev_total_msg_size);
+    number = std::min(number, available_size);
+    msgs.reserve(msgs.size() + number);
+
+    for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
+        auto& index = paged_message_indices_[page_idx];
+        // read all messages to msgs
+        data_file_->read(index.page_offset,
+                         [this, &index, &offset, &number, &msgs](const char* ptr) {
+                             this->read_msgs(index, offset, number, ptr, msgs);
+                         });
+    }
+
+    return msgs;
+}
+
+QueueStore::QueueStore(const String& location)
+    : location_(location), data_file_(location + "/messages.data") {}
+
+QueueStore::~QueueStore() {}
 
 SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_name) {
     auto it = queues_.find(queue_name);
     if (it == queues_.end()) {
-        SharedPtr<MessageQueue> queue_ptr =
-            std::make_shared<MessageQueue>(&index_file_, &data_file_);
+        SharedPtr<MessageQueue> queue_ptr = std::make_shared<MessageQueue>(&data_file_);
         auto it_res = queues_.insert(std::make_pair(queue_name, std::move(queue_ptr)));
         it = it_res.first;
         if (it_res.second) {  // creates a new queue
             auto& q = it->second;
-            q->set_queue_id(queue_id_generator_.next());
+            q->set_queue_id(next_queue_id_.next());
             q->set_queue_name(queue_name);
 
             DLOG("Created a new queue, id: %d, name: %s", q.get_queue_id(),
@@ -255,7 +266,7 @@ void QueueStore::put(const String& queue_name, const MemBlock& message) {
 Vector<MemBlock> QueueStore::get(const String& queue_name, long offset, long size) {
     auto q_ptr = find_queue(queue_name);
     if (q_ptr) return q_ptr->get(offset, size);
-    // return empty list when not found
+    // return empty list when queue is not found
     return Vector<MemBlock>();
 }
 }  // namespace race2018

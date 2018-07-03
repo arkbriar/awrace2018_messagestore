@@ -17,3 +17,6 @@ RUN wget https://github.com/01org/tbb/archive/2018_U5.tar.gz -O /tmp/2018_U5.tar
 
 # Setup cmake3
 RUN ln -sf /usr/bin/cmake3 /usr/bin/cmake
+
+# Install tcmalloc
+RUN yum install -y gperftools-libs
