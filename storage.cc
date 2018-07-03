@@ -70,14 +70,14 @@ void MessageQueue::flush_all() const {
     }
 }
 
-void MessageQueue::flush_messages_of_last_page(bool lock = true) const {
+void MessageQueue::flush_messages_of_last_page(bool lock) const {
     if (messages_.empty()) return;
     flush_messages_of_page(messages_.front().page, lock);
 }
 
-void MessageQueue::flush_indices_of_last_page(bool lock = true) const {
+void MessageQueue::flush_indices_of_last_page(bool lock) const {
     if (index_entries_.empty()) return;
-    flush_indices_of_last_page(index_entries_.front().page, lock);
+    flush_indices_of_page(index_entries_.front().page, lock);
 }
 
 void MessageQueue::flush_indices_of_page(uint64_t page_offset, bool lock) const {
