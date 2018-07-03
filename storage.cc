@@ -70,6 +70,16 @@ void MessageQueue::flush_all() const {
     }
 }
 
+void MessageQueue::flush_messages_of_last_page(bool lock = true) const {
+    if (messages_.empty()) return;
+    flush_messages_of_page(messages_.front().page, lock);
+}
+
+void MessageQueue::flush_indices_of_last_page(bool lock = true) const {
+    if (index_entries_.empty()) return;
+    flush_indices_of_last_page(index_entries_.front().page, lock);
+}
+
 void MessageQueue::flush_indices_of_page(uint64_t page_offset, bool lock) const {
     if (index_entries_.empty() || index_entries_.front().page != page_offset) return;
     if (lock) mutex_.lock();
@@ -107,10 +117,8 @@ void MessageQueue::put(const MemBlock& message) {
     PagedMessage msg;
     msg.msg = message;
     bool new_data_page = allocate_next_data_slot(msg.page, msg.offset, message.size);
+    if (new_data_page) flush_messages_of_last_page();
     messages_.push(msg);
-    if (new_data_page) {
-        flush_messages_of_page(msg.page);
-    }
 
     // commit log to index slot, current active index page offset
     // is @idx_off, current active index slot offset (in page) is
@@ -119,10 +127,8 @@ void MessageQueue::put(const MemBlock& message) {
     index_entry.offset = msg.page + msg.offset;
     index_entry.raw_length = message.size;
     index_entry.length = message.size;
+    if (new_index_page) flush_indices_of_last_page();
     index_entries_.push(index);
-    if (new_index_page) {
-        flush_indices_of_page(index.page);
-    }
 
     // update index page summary
     auto& last_idx = const_cast<IndexPageSummary&>(summaries_.back());

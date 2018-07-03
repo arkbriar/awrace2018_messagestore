@@ -319,6 +319,8 @@ protected:
     bool allocate_next_index_slot(uint64_t& page_off, uint16_t& slot_off);
     bool allocate_next_data_slot(uint64_t& page_off, uint16_t& slot_off, uint16_t size);
     void flush_all() const;
+    void flush_messages_of_last_page(bool lock = true) const;
+    void flush_indices_of_last_page(bool lock = true) const;
     void flush_messages_of_page(uint64_t page_offset, bool lock = true) const;
     void flush_indices_of_page(uint64_t page_offset, bool lock = true) const;
     Vector<PageSegment> find_index_segments(uint64_t msg_offset, uint64_t& msg_num) const;
