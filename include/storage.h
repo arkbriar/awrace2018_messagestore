@@ -314,7 +314,7 @@ public:
     Vector<MemBlock> get(const String& queue_name, long offset, long size);
 
 protected:
-    ConcurrentUnorderedMap<String, SharedPtr<MessageQueue>> queues_;
+    ConcurrentHashMap<String, SharedPtr<MessageQueue>> queues_;
 
     SharedPtr<MessageQueue> find_or_create_queue(const String& queue_name);
     SharedPtr<MessageQueue> find_queue(const String& queue_name) const;

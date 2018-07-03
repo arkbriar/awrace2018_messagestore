@@ -269,26 +269,24 @@ void QueueStore::flush_queues_metadatas() {
 }
 
 SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_name) {
-    auto it = queues_.find(queue_name);
-    if (it == queues_.end()) {
-        SharedPtr<MessageQueue> queue_ptr = std::make_shared<MessageQueue>(&data_file_);
-        auto it_res = queues_.insert(std::make_pair(queue_name, std::move(queue_ptr)));
-        it = it_res.first;
-        if (it_res.second) {  // creates a new queue
-            auto& q = it->second;
-            q->set_queue_id(next_queue_id_.next());
-            q->set_queue_name(queue_name);
+    ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_accessor ac;
 
-            DLOG("Created a new queue, id: %d, name: %s", q.get_queue_id(),
-                 q.get_queue_name().c_str());
-        }
+    SharedPtr<MessageQueue> queue_ptr = std::make_shared<MessageQueue>(&data_file_);
+    auto inserted = queues_.insert(ac, std::make_pair(queue_name, std::move(queue_ptr)));
+    if (inserted) {  // creates a new queue
+        auto& q = ac->second;
+        q->set_queue_id(next_queue_id_.next());
+        q->set_queue_name(queue_name);
+
+        DLOG("Created a new queue, id: %d, name: %s", q.get_queue_id(), q.get_queue_name().c_str());
     }
-    return it->second;
+    return ac->second;
 }
 
 SharedPtr<MessageQueue> QueueStore::find_queue(const String& queue_name) const {
-    auto it = queues_.find(queue_name);
-    return it == queues_.end() ? nullptr : it->second;
+    ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_accessor ac;
+    auto found = queues_.find(ac, queue_name);
+    return found ? ac->second : nullptr;
 }
 
 void QueueStore::put(const String& queue_name, const MemBlock& message) {
