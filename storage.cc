@@ -230,10 +230,42 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
     return msgs;
 }
 
-QueueStore::QueueStore(const String& location)
-    : location_(location), data_file_(location + "/messages.data") {}
+QueueStore::QueueStore(const String& location) : location_(location), data_file_(data_file_path()) {
+    // currently loading from index file is disabled.
+    /* load_queues_metadatas(); */
+}
 
-QueueStore::~QueueStore() {}
+QueueStore::~QueueStore() { flush_queues_metadatas(); }
+
+void QueueStore::load_queues_metadatas() {
+    int fd = ::open(index_file_path().c_str(), O_RDONLY);
+    if (fd < 0) return;
+
+    char header_buf[sizeof(MessageQueue::MessageQueueIndexHeader)];
+    while (::read(fd, header_buf, sizeof(header_buf)) == sizeof(header_buf)) {
+        MessageQueue::MessageQueueIndexHeader header;
+        buffer::read_from_buf(header_buf, header);
+        char extra_buf[header.extra_length()];
+        if (::read(fd, extra_buf, sizeof(extra_buf)) != (ssize_t)sizeof(extra_buf)) return;
+
+        // set up queue
+        SharedPtr<MessageQueue> q = std::make_shared<MessageQueue>(&data_file_);
+        q->load_queue_metadata(header, extra_buf);
+
+        // add this queue
+        queues_.insert(std::make_pair(q->get_queue_name(), q));
+    }
+}
+
+void QueueStore::flush_queues_metadatas() {
+    int fd = ::open(index_file_path().c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+    assert(fd > 0);
+    for (auto& entry : queues_) {
+        auto& q = entry.second;
+        q->flush_write_queue();
+        q->flush_queue_metadata(fd);
+    }
+}
 
 SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_name) {
     auto it = queues_.find(queue_name);

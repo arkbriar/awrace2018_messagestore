@@ -47,7 +47,7 @@ union ReadWriter {
 
 template <class T>
 void read_from_buf(const void* src, T& data) {
-    ReadWriter<T>* reader = reinterpret_cast<ReadWriter<T>*>(data);
+    ReadWriter<T>* reader = reinterpret_cast<ReadWriter<T>*>(&data);
     ::memcpy(reader->bytes, src, sizeof(T));
 }
 
@@ -170,36 +170,37 @@ private:
 };
 
 class QueueStore;
-class MessageCache {
-public:
-    void push(uint64_t msg_offset, const MemBlock& msg) {
-        // if not continuous, which means cache miss, drop all buffered messages.
-        if (msgs_.empty() || msg_offset != msg_offset_ + 1) {
-            Queue<MemBlock> empty;
-            msgs_.swap(empty);
-        }
-        msgs_.push(msg);
-        msg_offset_ = msg_offset;
-    }
-
-    bool pop(MemBlock& msg) {
-        if (msgs_.empty()) return false;
-        msg = msgs_.front();
-        msgs_.pop();
-        ++msg_offset_;
-        return true;
-    }
-
-    size_t size() const { return msgs_.size(); }
-
-    uint64_t msg_offset_;
-    Queue<MemBlock> msgs_;
-};
+/* class MessageCache {
+ * public:
+ *     void push(uint64_t msg_offset, const MemBlock& msg) {
+ *         // if not continuous, which means cache miss, drop all buffered messages.
+ *         if (msgs_.empty() || msg_offset != msg_offset_ + 1) {
+ *             Queue<MemBlock> empty;
+ *             msgs_.swap(empty);
+ *         }
+ *         msgs_.push(msg);
+ *         msg_offset_ = msg_offset;
+ *     }
+ *
+ *     bool pop(MemBlock& msg) {
+ *         if (msgs_.empty()) return false;
+ *         msg = msgs_.front();
+ *         msgs_.pop();
+ *         ++msg_offset_;
+ *         return true;
+ *     }
+ *
+ *     size_t size() const { return msgs_.size(); }
+ *
+ *     uint64_t msg_offset_;
+ *     Queue<MemBlock> msgs_;
+ * }; */
 
 struct __attribute__((__packed__)) MessagePageIndex {
     uint64_t page_offset;
     uint64_t prev_total_msg_size;
     uint16_t msg_size = 0;
+    MessagePageIndex() {}
     MessagePageIndex(uint64_t page_offset, uint64_t prev_total_msg_size)
         : page_offset(page_offset), prev_total_msg_size(prev_total_msg_size) {}
     uint64_t total_msg_size() const { return prev_total_msg_size + msg_size; }
@@ -225,11 +226,65 @@ protected:
     uint64_t next_message_slot(uint64_t& page_offset, uint16_t& slot_offset, uint16_t size);
     // Methods for flushing data
     void flush_write_queue(uint64_t page_offset);
+    void flush_write_queue() { flush_write_queue(cur_data_page_off_); }
 
     // Methods for QueueStore to initialize id and name when it
     // create a new queue.
     void set_queue_id(uint32_t queue_id) { this->queue_id_ = queue_id; }
     void set_queue_name(const String& queue_name) { this->queue_name_ = queue_name; }
+
+    struct __attribute__((__packed__)) MessageQueueIndexHeader {
+        uint32_t queue_id;
+        uint32_t name_size;
+        uint64_t page_offset;
+        uint16_t slot_offset;
+        uint32_t indices_size;
+
+        uint64_t index_size() const { return sizeof(MessageQueueIndexHeader) + extra_length(); }
+        uint64_t extra_length() const {
+            return name_size + indices_size * sizeof(MessagePageIndex);
+        }
+    };
+
+    void construct_header(MessageQueueIndexHeader& hdr) {
+        hdr.queue_id = queue_id_;
+        hdr.name_size = queue_name_.size();
+        hdr.page_offset = cur_data_page_off_;
+        hdr.slot_offset = cur_data_slot_off_;
+        hdr.indices_size = paged_message_indices_.size();
+    }
+
+    void flush_queue_metadata(int fd) {
+        MessageQueueIndexHeader header;
+        construct_header(header);
+        size_t buf_len = header.index_size();
+
+        char* buf[buf_len];
+        buffer::write_to_buf(buf, header);
+        memcpy(buf + sizeof(MessageQueueIndexHeader), queue_name_.c_str(), header.name_size);
+        auto ptr = buf + sizeof(MessageQueueIndexHeader) + header.name_size;
+        for (auto& index : paged_message_indices_) {
+            buffer::write_to_buf(ptr, index);
+            ptr += sizeof(index);
+        }
+        ::write(fd, buf, buf_len);
+    }
+
+    void load_queue_metadata(const MessageQueueIndexHeader& hdr, const char* buf) {
+        queue_id_ = hdr.queue_id;
+        cur_data_page_off_ = hdr.page_offset;
+        cur_data_slot_off_ = hdr.slot_offset;
+        queue_name_ = String(buf, hdr.name_size);
+        paged_message_indices_.reserve(hdr.indices_size);
+
+        MessagePageIndex msg_index;
+        auto ptr = buf + hdr.name_size;
+        for (uint32_t i = 0; i < hdr.indices_size; ++i) {
+            buffer::read_from_buf(ptr, msg_index);
+            paged_message_indices_.push_back(msg_index);
+            ptr += sizeof(MessagePageIndex);
+        }
+    }
 
 private:
     uint32_t queue_id_ = -1;
@@ -240,7 +295,7 @@ private:
     uint16_t cur_data_slot_off_ = 0;
 
     // Read cache
-    MessageCache read_cache_;
+    /* MessageCache read_cache_; */
     // Write queue
     std::mutex wq_mutex_;
     Queue<MemBlock> write_queue_;
@@ -263,6 +318,13 @@ protected:
 
     SharedPtr<MessageQueue> find_or_create_queue(const String& queue_name);
     SharedPtr<MessageQueue> find_queue(const String& queue_name) const;
+
+    String data_file_path() const { return location_ + "/messages.data"; }
+    String index_file_path() const { return location_ + "/index.data"; }
+    // load all queues' metadatas from disk file index.data
+    void load_queues_metadatas();
+    // flush all queues' metadatas to disk file index.data
+    void flush_queues_metadatas();
 
 private:
     String location_;
