@@ -89,7 +89,7 @@ uint64_t PagedFile::next_page_offset() { return page_offset.next(); }
 
 MessageQueue::MessageQueue() {}
 
-MessageQueue(uint32_t queue_id, const String& queue_name, PagedFile* data_file)
+MessageQueue::MessageQueue(uint32_t queue_id, const String& queue_name, PagedFile* data_file)
     : queue_id_(queue_id), queue_name_(queue_name), data_file_(data_file) {}
 
 uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_offset,
