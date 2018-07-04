@@ -212,7 +212,7 @@ class MessageQueue {
     friend class QueueStore;
 
 public:
-    explicit MessageQueue(PagedFile* data_file);
+    explicit MessageQueue();
 
     uint32_t get_queue_id() const { return this->queue_id_; }
     const String& get_queue_name() const { return this->queue_name_; }
@@ -235,6 +235,7 @@ protected:
     // create a new queue.
     void set_queue_id(uint32_t queue_id) { this->queue_id_ = queue_id; }
     void set_queue_name(const String& queue_name) { this->queue_name_ = queue_name; }
+    void set_data_file(PagedFile* data_file) { this->data_file_ = data_file; }
 
     struct __attribute__((__packed__)) MessageQueueIndexHeader {
         uint32_t queue_id;
@@ -308,6 +309,8 @@ private:
     PagedFile* data_file_;
 };
 
+#define DATA_FILE_SPLITS 10
+
 class QueueStore {
 public:
     QueueStore(const String& location);
@@ -322,7 +325,9 @@ protected:
     SharedPtr<MessageQueue> find_or_create_queue(const String& queue_name);
     SharedPtr<MessageQueue> find_queue(const String& queue_name) const;
 
-    String data_file_path() const { return location_ + "/messages.data"; }
+    String data_file_path(int idx) const {
+        return location_ + "/messages_" + std::to_string(idx) + ".data";
+    }
     String index_file_path() const { return location_ + "/index.data"; }
     // load all queues' metadatas from disk file index.data
     void load_queues_metadatas();
@@ -331,7 +336,7 @@ protected:
 
 private:
     String location_;
-    PagedFile data_file_;
+    PagedFile* data_files_[DATA_FILE_SPLITS];
     SteppedValue<uint32_t> next_queue_id_{1};
 };
 

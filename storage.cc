@@ -252,12 +252,23 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
     return msgs;
 }
 
-QueueStore::QueueStore(const String& location) : location_(location), data_file_(data_file_path()) {
+QueueStore::QueueStore(const String& location) : location_(location) {
     // currently loading from index file is disabled.
     /* load_queues_metadatas(); */
+
+    // load all data files
+    for (int i = 0; i < DATA_FILE_SPLITS; ++i) {
+        data_files_[i] = new PagedFile(data_file_path(i));
+    }
 }
 
-QueueStore::~QueueStore() { flush_queues_metadatas(); }
+QueueStore::~QueueStore() {
+    flush_queues_metadatas();
+
+    for (int i = 0; i < DATA_FILE_SPLITS; ++i) {
+        delete data_files_[i];
+    }
+}
 
 void QueueStore::load_queues_metadatas() {
     int fd = ::open(index_file_path().c_str(), O_RDONLY);
@@ -292,15 +303,18 @@ void QueueStore::flush_queues_metadatas() {
 SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_name) {
     ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_accessor ac;
 
-    SharedPtr<MessageQueue> queue_ptr = std::make_shared<MessageQueue>(&data_file_);
-    auto inserted = queues_.insert(ac, std::make_pair(queue_name, std::move(queue_ptr)));
+    SharedPtr<MessageQueue> queue_ptr;
+    auto inserted = queues_.insert(ac, std::make_pair(queue_name, queue_ptr));
     if (inserted) {  // creates a new queue
         auto& q = ac->second;
+        q.reset(new PagedFile());
         q->set_queue_id(next_queue_id_.next());
         q->set_queue_name(queue_name);
-
-        DLOG("Created a new queue, id: %d, name: %s", q.get_queue_id(), q.get_queue_name().c_str());
+        q->set_data_file(data_files_[q->get_queue_id() % DATA_FILE_SPLITS]);
+        DLOG("Created a new queue, id: %d, name: %s", q->get_queue_id(),
+             q->get_queue_name().c_str());
     }
+
     return ac->second;
 }
 
