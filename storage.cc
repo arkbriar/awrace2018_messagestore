@@ -59,7 +59,7 @@ void PagedFile::read(uint64_t offset, FilePage* page) {
     if (ret == -1) perror("read page failed");
 }
 
-void PagedFile::write(uint64_t offset, FilePage* page) {
+void PagedFile::write(uint64_t offset, const FilePage* page) {
     if (!page) return;
     ssize_t ret = ::pwrite(fd_, (const void*)page, FILE_PAGE_SIZE, offset);
     if (ret == -1) perror("write page failed");
@@ -284,7 +284,7 @@ void QueueStore::flush_queues_metadatas() {
     assert(fd > 0);
     for (auto& entry : queues_) {
         auto& q = entry.second;
-        q->flush_write_queue();
+        q->flush_last_page();
         q->flush_queue_metadata(fd);
     }
 }
