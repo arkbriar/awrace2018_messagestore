@@ -94,6 +94,18 @@ MessageQueue::MessageQueue(uint32_t queue_id, const String& queue_name, PagedFil
 
 uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_offset,
                                          uint16_t size) {
+    // first page will hold at most (queue_id / DATA_FILE_SPLITS) % 64 + 1 messages, this make write
+    // more average
+    if (paged_message_indices_.size() == 1 &&
+        paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 63) + 1) {
+        uint64_t prev_data_page_off = cur_data_page_off_;
+        page_offset = cur_data_page_off_ = data_file_->next_page_offset();
+        slot_offset = 0;
+        cur_data_slot_off_ = size;
+        return prev_data_page_off;
+    }
+
+    // deal with the following pages
     if (cur_data_page_off_ == NEGATIVE_OFFSET ||
         cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE) {
         uint64_t prev_data_page_off = cur_data_page_off_;
@@ -126,12 +138,12 @@ void MessageQueue::write_to_last_page(const MemBlock& msg, uint16_t slot_offset)
         // lazy allocate page
         last_page_ = new FilePage();
     }
-    if (message.size < 0x80) {
-        last_page_->content[slot_offset] = message.size;
+    if (msg.size < 0x80) {
+        last_page_->content[slot_offset] = msg.size;
         ::memcpy(last_page_->content + slot_offset + 1, msg.ptr, msg.size);
     } else {
-        last_page_->content[slot_offset] = ((message.size >> 8) | 0x80);
-        last_page_->content[slot_offset + 1] = message.size & 0xff;
+        last_page_->content[slot_offset] = ((msg.size >> 8) | 0x80);
+        last_page_->content[slot_offset + 1] = msg.size & 0xff;
         ::memcpy(last_page_->content + slot_offset + 2, msg.ptr, msg.size);
     }
 }
@@ -185,7 +197,7 @@ size_t MessageQueue::binary_search_indices(uint64_t msg_offset) const {
     return first;
 }
 
-uint16_t MessageQueue::extract_message_length(char*& ptr) {
+uint16_t MessageQueue::extract_message_length(const char*& ptr) {
     uint16_t msg_size = *ptr;
     if (msg_size < 0x80) {
         ++ptr;
