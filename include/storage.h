@@ -25,7 +25,7 @@ static MemBlock new_memblock(const char* src, size_t size) {
     MemBlock msg;
     msg.ptr = ::malloc(size);
     ::memcpy(msg.ptr, src, size);
-    msg.size = (src[size - 1] == '\0') ? size - 1 : size;
+    msg.size = size;
     return msg;
 }
 static inline void free_message(const Message& msg) { ::free(msg.ptr); }
