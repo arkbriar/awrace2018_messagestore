@@ -53,6 +53,18 @@ void PagedFile::write(uint64_t offset, const FilePageWriter& writer) {
     if (ret == -1) perror("write page failed");
 }
 
+void PagedFile::read(uint64_t offset, FilePage* page) {
+    if (!page) return;
+    ssize_t ret = ::pread(fd_, (void*)page, FILE_PAGE_SIZE, offset);
+    if (ret == -1) perror("read page failed");
+}
+
+void PagedFile::write(uint64_t offset, FilePage* page) {
+    if (!page) return;
+    ssize_t ret = ::pwrite(fd_, (const void*)page, FILE_PAGE_SIZE, offset);
+    if (ret == -1) perror("write page failed");
+}
+
 void PagedFile::mapped_read(uint64_t offset, const FilePageReader& reader) {
     MappedFilePagePtr page_ptr(fd_, offset, true);
     if (!page_ptr) {
@@ -94,21 +106,26 @@ uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_o
     }
 }
 
-void MessageQueue::flush_write_queue(uint64_t page_offset) {
-    if (write_queue_.empty()) return;
+void MessageQueue::flush_last_page(uint64_t page_offset, bool release) {
+    if (!last_page_) return;
 
     std::unique_lock<std::mutex> lock(wq_mutex_);
     // write all messages in this queue to page of page_offset
-    data_file_->write(page_offset, [this](char* ptr) {
-        while (!write_queue_.empty()) {
-            auto& msg = write_queue_.front();
-            memcpy(ptr, msg.ptr, msg.size);
-            ptr[msg.size] = '\0';
-            ptr += msg.size + 1;
-            ::free(msg.ptr);
-            write_queue_.pop();
-        }
-    });
+    data_file_->write(page_offset, last_page_);
+    if (release) {
+        delete last_page_;
+        last_page_ = nullptr;
+    }
+}
+
+void MessageQueue::write_to_last_page(const MemBlock& msg, uint16_t slot_offset) {
+    if (!last_page_) {
+        // lazy allocate page
+        last_page_ = new FilePage();
+    }
+
+    ::memcpy(last_page_->content + slot_offset, msg.ptr, msg.size);
+    last_page_->content[slot_offset + msg.size] = '\0';
 }
 
 // put is sequential to support index verification
@@ -121,7 +138,7 @@ void MessageQueue::put(const MemBlock& message) {
     if (prev_page_offset != page_offset) {
         // a new data page is allocated
         // flush messages of previous page
-        flush_write_queue(prev_page_offset);
+        flush_last_page(prev_page_offset, false);
 
         // create a new paged message index
         uint64_t prev_total_msg_size = 0;
@@ -132,8 +149,11 @@ void MessageQueue::put(const MemBlock& message) {
         paged_message_indices_.emplace_back(page_offset, prev_total_msg_size);
     }
 
-    // write message into write queue
-    write_queue_.push(message);
+    // write message into last page
+    write_to_last_page(message, slot_offset);
+
+    // free message
+    ::free(message.ptr);
 
     ++paged_message_indices_.back().msg_size;
 }
@@ -186,7 +206,8 @@ void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, ui
 }
 
 Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
-    if (!write_queue_.empty()) flush_write_queue(cur_data_page_off_);
+    // flush and release the last writing page
+    if (last_page_) flush_last_page();
 
     Vector<MemBlock> msgs;
     // read messages from cache
@@ -290,6 +311,7 @@ SharedPtr<MessageQueue> QueueStore::find_queue(const String& queue_name) const {
 }
 
 void QueueStore::put(const String& queue_name, const MemBlock& message) {
+    if (!message.ptr) return;
     auto q_ptr = find_or_create_queue(queue_name);
     q_ptr->put(message);
 }

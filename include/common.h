@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <boost/circular_buffer.hpp>
 #include <boost/scoped_ptr.hpp>
 #include <cassert>
 #include <cstdint>
@@ -35,6 +36,8 @@ template <class T>
 using Queue = std::queue<T>;
 template <class K, class V>
 using Pair = std::pair<K, V>;
+template <class T>
+using CircularBuffer = boost::circular_buffer<T>;
 
 // Smart pointers
 template <class T>

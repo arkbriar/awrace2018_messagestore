@@ -155,7 +155,9 @@ public:
     const String& get_file() const { return this->file_; }
     size_t size() const { return this->size_; }
     void read(uint64_t offset, const FilePageReader& reader);
+    void read(uint64_t offset, FilePage* page);
     void write(uint64_t offset, const FilePageWriter& writer);
+    void write(uint64_t offset, const FilePage* page);
     void mapped_read(uint64_t offset, const FilePageReader& reader);
     void mapped_write(uint64_t offset, const FilePageWriter& writer);
     uint64_t next_page_offset();
@@ -224,9 +226,10 @@ protected:
     size_t binary_search_indices(uint64_t msg_offset) const;
     // Methods for message slots in data page
     uint64_t next_message_slot(uint64_t& page_offset, uint16_t& slot_offset, uint16_t size);
-    // Methods for flushing data
-    void flush_write_queue(uint64_t page_offset);
-    void flush_write_queue() { flush_write_queue(cur_data_page_off_); }
+    // Methods for write/flushing data
+    void write_to_last_page(const MemBlock& msg, uint16_t slot_offset);
+    void flush_last_page(uint64_t page_offset, bool release);
+    void flush_last_page() { flush_last_page(cur_data_page_off_, true); }
 
     // Methods for QueueStore to initialize id and name when it
     // create a new queue.
@@ -296,9 +299,9 @@ private:
 
     // Read cache
     /* MessageCache read_cache_; */
-    // Write queue
+    // Write buffer
     std::mutex wq_mutex_;
-    Queue<MemBlock> write_queue_;
+    FilePage* last_page_;
     // Paged message index
     Vector<MessagePageIndex> paged_message_indices_;
     // Date file
