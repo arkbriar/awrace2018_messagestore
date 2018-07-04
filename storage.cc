@@ -308,7 +308,7 @@ SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_nam
     auto inserted = queues_.insert(ac, std::make_pair(queue_name, queue_ptr));
     if (inserted) {  // creates a new queue
         auto& q = ac->second;
-        q.reset(new PagedFile());
+        q.reset(new MessageQueue());
         q->set_queue_id(next_queue_id_.next());
         q->set_queue_name(queue_name);
         q->set_data_file(data_files_[q->get_queue_id() % DATA_FILE_SPLITS]);
