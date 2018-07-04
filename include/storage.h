@@ -172,32 +172,6 @@ private:
 };
 
 class QueueStore;
-/* class MessageCache {
- * public:
- *     void push(uint64_t msg_offset, const MemBlock& msg) {
- *         // if not continuous, which means cache miss, drop all buffered messages.
- *         if (msgs_.empty() || msg_offset != msg_offset_ + 1) {
- *             Queue<MemBlock> empty;
- *             msgs_.swap(empty);
- *         }
- *         msgs_.push(msg);
- *         msg_offset_ = msg_offset;
- *     }
- *
- *     bool pop(MemBlock& msg) {
- *         if (msgs_.empty()) return false;
- *         msg = msgs_.front();
- *         msgs_.pop();
- *         ++msg_offset_;
- *         return true;
- *     }
- *
- *     size_t size() const { return msgs_.size(); }
- *
- *     uint64_t msg_offset_;
- *     Queue<MemBlock> msgs_;
- * }; */
-
 struct __attribute__((__packed__)) MessagePageIndex {
     uint64_t page_offset;
     uint64_t prev_total_msg_size;
@@ -231,12 +205,13 @@ protected:
     void write_to_last_page(const MemBlock& msg, uint16_t slot_offset);
     void flush_last_page(uint64_t page_offset, bool release);
     void flush_last_page() { flush_last_page(cur_data_page_off_, true); }
-
     // Methods for QueueStore to initialize id and name when it
     // create a new queue.
     void set_queue_id(uint32_t queue_id) { this->queue_id_ = queue_id; }
     void set_queue_name(const String& queue_name) { this->queue_name_ = queue_name; }
     void set_data_file(PagedFile* data_file) { this->data_file_ = data_file; }
+    // Methods for extracting message length
+    uint16_t extract_message_length(char*& ptr);
 
     struct __attribute__((__packed__)) MessageQueueIndexHeader {
         uint32_t queue_id;
@@ -299,8 +274,6 @@ private:
     uint64_t cur_data_page_off_ = NEGATIVE_OFFSET;
     uint16_t cur_data_slot_off_ = 0;
 
-    // Read cache
-    /* MessageCache read_cache_; */
     // Write buffer
     std::mutex wq_mutex_;
     FilePage* last_page_;

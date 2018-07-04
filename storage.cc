@@ -126,14 +126,25 @@ void MessageQueue::write_to_last_page(const MemBlock& msg, uint16_t slot_offset)
         // lazy allocate page
         last_page_ = new FilePage();
     }
-
-    ::memcpy(last_page_->content + slot_offset, msg.ptr, msg.size);
-    last_page_->content[slot_offset + msg.size] = '\0';
+    if (message.size < 0x80) {
+        last_page_->content[slot_offset] = message.size;
+        ::memcpy(last_page_->content + slot_offset + 1, msg.ptr, msg.size);
+    } else {
+        last_page_->content[slot_offset] = ((message.size >> 8) | 0x80);
+        last_page_->content[slot_offset + 1] = message.size & 0xff;
+        ::memcpy(last_page_->content + slot_offset + 2, msg.ptr, msg.size);
+    }
 }
 
 // put is sequential to support index verification
 void MessageQueue::put(const MemBlock& message) {
+    // maximum support message size of
+    assert(message.size <= 4000);
+
     uint16_t msg_size = message.size + 1;
+    // use 2 bytes to record message length >= 128,
+    // and use 1 byte to record message length < 128
+    if (message.size >= 0x80) msg_size += 1;
 
     uint64_t page_offset;
     uint16_t slot_offset;
@@ -174,56 +185,44 @@ size_t MessageQueue::binary_search_indices(uint64_t msg_offset) const {
     return first;
 }
 
+uint16_t MessageQueue::extract_message_length(char*& ptr) {
+    uint16_t msg_size = *ptr;
+    if (msg_size < 0x80) {
+        ++ptr;
+        return msg_size;
+    } else {
+        ptr += 2;
+        return ((msg_size & 0x7f) << 8) + (uint8_t)*ptr;
+    }
+}
+
 void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, uint64_t& num,
                              const char* ptr, Vector<MemBlock>& msgs) {
     uint64_t cur_offset = index.prev_total_msg_size;
     uint16_t size = index.msg_size;
     if (offset >= cur_offset + size) return;
 
-    auto begin = ptr, end = ptr;
+    auto begin = ptr;
 
     // skip to match offset
     while (cur_offset != offset && size > 0) {
-        while (*end != '\0') ++end;
-        begin = ++end;
+        uint16_t msg_size = extract_message_length(begin);
+        begin += msg_size;
         ++cur_offset, --size;
     }
 
     // read related messages to msgs
     while (num > 0 && size > 0) {
-        while (*end != '\0') ++end;
-        assert(end > begin);
-        msgs.push_back(new_memblock(begin, end - begin + 1));
-        begin = ++end;
+        uint16_t msg_size = extract_message_length(begin);
+        msgs.push_back(new_memblock(begin, msg_size));
+        begin += msg_size;
         ++cur_offset, ++offset, --num, --size;
     }
-
-    // read extra messagse to cache
-    /* while (size > 0) {
-     *     while (*end != '\0') ++end;
-     *     assert(end > begin);
-     *     read_cache_.push(cur_offset, new_memblock(begin, end - begin + 1));
-     *     begin = ++end;
-     *     ++cur_offset, --size;
-     * } */
 }
 
 Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
     // flush and release the last writing page
     if (last_page_) flush_last_page();
-
-    Vector<MemBlock> msgs;
-    // read messages from cache
-    /* if (offset == read_cache_.msg_offset_) {
-     *     msgs.reserve(std::min((size_t)number, read_cache_.size()));
-     *     MemBlock msg;
-     *     while (read_cache_.pop(msg) && number > 0) {
-     *         msgs.push_back(msg);
-     *         ++offset;
-     *         --number;
-     *     }
-     * }
-     * if (number == 0) return msgs; */
 
     size_t first_page_idx = binary_search_indices(offset);
 
@@ -241,7 +240,9 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
         std::min(offset + number, paged_message_indices_[last_page_idx].total_msg_size()) -
         std::max(offset, paged_message_indices_[first_page_idx].prev_total_msg_size);
     number = std::min(number, available_size);
-    msgs.reserve(msgs.size() + number);
+
+    Vector<MemBlock> msgs;
+    msgs.reserve(number);
 
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
