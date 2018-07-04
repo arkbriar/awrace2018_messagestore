@@ -211,7 +211,7 @@ protected:
     void set_queue_name(const String& queue_name) { this->queue_name_ = queue_name; }
     void set_data_file(PagedFile* data_file) { this->data_file_ = data_file; }
     // Methods for extracting message length
-    uint16_t extract_message_length(char*& ptr);
+    uint16_t extract_message_length(const char*& ptr);
 
     struct __attribute__((__packed__)) MessageQueueIndexHeader {
         uint32_t queue_id;
