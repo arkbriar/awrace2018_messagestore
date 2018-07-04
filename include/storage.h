@@ -213,6 +213,7 @@ class MessageQueue {
 
 public:
     explicit MessageQueue();
+    explicit MessageQueue(uint32_t queue_id, const String& queue_name, PagedFile* data_file);
 
     uint32_t get_queue_id() const { return this->queue_id_; }
     const String& get_queue_name() const { return this->queue_name_; }

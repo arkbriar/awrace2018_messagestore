@@ -89,6 +89,9 @@ uint64_t PagedFile::next_page_offset() { return page_offset.next(); }
 
 MessageQueue::MessageQueue() {}
 
+MessageQueue(uint32_t queue_id, const String& queue_name, PagedFile* data_file)
+    : queue_id_(queue_id), queue_name_(queue_name), data_file_(data_file) {}
+
 uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_offset,
                                          uint16_t size) {
     if (cur_data_page_off_ == NEGATIVE_OFFSET ||
@@ -303,19 +306,14 @@ void QueueStore::flush_queues_metadatas() {
 
 SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_name) {
     ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_accessor ac;
-
-    SharedPtr<MessageQueue> queue_ptr;
-    auto inserted = queues_.insert(ac, std::make_pair(queue_name, queue_ptr));
-    if (inserted) {  // creates a new queue
-        auto& q = ac->second;
-        q.reset(new MessageQueue());
-        q->set_queue_id(next_queue_id_.next());
-        q->set_queue_name(queue_name);
-        q->set_data_file(data_files_[q->get_queue_id() % DATA_FILE_SPLITS]);
+    if (!queues_.find(ac, queue_name)) {
+        uint32_t queue_id = next_queue_id_.next();
+        SharedPtr<MessageQueue> queue_ptr = std::make_shared<MessageQueue>(
+            queue_id, queue_name, data_files_[queue_id % DATA_FILE_SPLITS]);
+        queues_.insert(ac, std::make_pair(queue_name, queue_ptr));
         DLOG("Created a new queue, id: %d, name: %s", q->get_queue_id(),
              q->get_queue_name().c_str());
     }
-
     return ac->second;
 }
 
