@@ -19,10 +19,10 @@ int main(int argc, char* argv[]) {
     // test 1024 msg
     MemBlock msg;
     char* data = new char[1024];
-    for (int i = 0; i < 1020; ++i) {
-        data[i] = 'a';
+    memcpy(data, "1024", 4);
+    for (int i = 4; i < 1024; ++i) {
+        data[i] = '\0';
     }
-    memcpy(data + 1020, "1024", 4);
     msg.ptr = data;
     msg.size = 1024;
     store.put("Queue-1", msg);
