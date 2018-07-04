@@ -198,13 +198,11 @@ size_t MessageQueue::binary_search_indices(uint64_t msg_offset) const {
 }
 
 uint16_t MessageQueue::extract_message_length(const char*& ptr) {
-    uint16_t msg_size = *ptr;
+    uint16_t msg_size = *(ptr++);
     if (msg_size < 0x80) {
-        ++ptr;
         return msg_size;
     } else {
-        ptr += 2;
-        return ((msg_size & 0x7f) << 8) + (uint8_t)*ptr;
+        return ((msg_size & 0x7f) << 8) + (uint8_t)(*(ptr++));
     }
 }
 
