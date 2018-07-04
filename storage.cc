@@ -87,7 +87,7 @@ void PagedFile::mapped_write(uint64_t offset, const FilePageWriter& writer) {
 
 uint64_t PagedFile::next_page_offset() { return page_offset.next(); }
 
-MessageQueue::MessageQueue(PagedFile* data_file) : data_file_(data_file) {}
+MessageQueue::MessageQueue() {}
 
 uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_offset,
                                          uint16_t size) {
@@ -253,13 +253,13 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
 }
 
 QueueStore::QueueStore(const String& location) : location_(location) {
-    // currently loading from index file is disabled.
-    /* load_queues_metadatas(); */
-
     // load all data files
     for (int i = 0; i < DATA_FILE_SPLITS; ++i) {
         data_files_[i] = new PagedFile(data_file_path(i));
     }
+
+    // currently loading from index file is disabled.
+    /* load_queues_metadatas(); */
 }
 
 QueueStore::~QueueStore() {
@@ -282,8 +282,9 @@ void QueueStore::load_queues_metadatas() {
         if (::read(fd, extra_buf, sizeof(extra_buf)) != (ssize_t)sizeof(extra_buf)) return;
 
         // set up queue
-        SharedPtr<MessageQueue> q = std::make_shared<MessageQueue>(&data_file_);
+        SharedPtr<MessageQueue> q = std::make_shared<MessageQueue>();
         q->load_queue_metadata(header, extra_buf);
+        q->set_data_file(data_files_[q->get_queue_id() % DATA_FILE_SPLITS]);
 
         // add this queue
         queues_.insert(std::make_pair(q->get_queue_name(), q));
