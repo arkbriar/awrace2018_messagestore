@@ -263,6 +263,11 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
                          });
     }
 
+    // try to read ahead next page
+#ifdef __linux__
+    data_file_->readahead(paged_message_indices_[last_page_idx].page_offset);
+#endif
+
     return msgs;
 }
 
