@@ -1,7 +1,7 @@
 #include "storage.h"
 
 #include <thread>
-#include "tbb/parallel_for_each.h"
+#include "tbb/parallel_for.h"
 
 namespace race2018 {
 
@@ -389,8 +389,17 @@ SharedPtr<MessageQueue> QueueStore::find_queue(const String& queue_name) const {
 void QueueStore::sweep_caches() {
     bool expected = false;
     if (cache_cleared.compare_exchange_strong(expected, true)) {
-        tbb::parallel_for_each(queues_,
-                               [](const SharedPtr<MessageQueue>& mq) { mq->flush_last_page(); });
+        std::thread sweeper([this]() {
+            size_t grainsize = queues_.size() / std::thread::hardware_concurrency();
+            using RangeType = ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_range_type;
+            tbb::parallel_for(queues_.range(grainsize), [](const RangeType& r) {
+                for (auto it = r.begin(); it != r.end(); ++it) {
+                    auto mq_ptr = *it;
+                    mq->flush_last_page();
+                }
+            });
+        });
+        sweeper.detach();
     }
 }
 
