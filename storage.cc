@@ -89,7 +89,7 @@ void PagedFile::mapped_write(uint64_t offset, const FilePageWriter& writer) {
     }
 }
 
-uint64_t PagedFile::next_page_offset() { return page_offset.next(); }
+uint64_t PagedFile::next_extent_offset() { return extent_offset.next(); }
 
 MessageQueue::MessageQueue() {}
 
@@ -154,7 +154,8 @@ uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_o
     if (paged_message_indices_.size() == 1 &&
         paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 63) + 1) {
         uint64_t prev_data_page_off = cur_data_page_off_;
-        page_offset = cur_data_page_off_ = data_file_->next_page_offset();
+        cur_data_page_off_ += FILE_PAGE_SIZE;
+        page_offset = cur_data_page_off_;
         slot_offset = 0;
         cur_data_slot_off_ = size;
         return prev_data_page_off;
@@ -164,7 +165,15 @@ uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_o
     if (cur_data_page_off_ == NEGATIVE_OFFSET ||
         cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE) {
         uint64_t prev_data_page_off = cur_data_page_off_;
-        page_offset = cur_data_page_off_ = data_file_->next_page_offset();
+        // if this page is the last page in extent, then allocate next
+        // extent
+        if (cur_data_page_off_ == NEGATIVE_OFFSET ||
+            PAGE_INDEX_IN_EXTENT(cur_data_page_off_) == FILE_PAGE_PER_EXTENT - 1) {
+            cur_data_page_off_ = data_file_->next_extent_offset();
+        } else {
+            cur_data_page_off_ += FILE_PAGE_SIZE;
+        }
+        page_offset = cur_data_page_off_;
         slot_offset = 0;
         cur_data_slot_off_ = size;
         return prev_data_page_off;
