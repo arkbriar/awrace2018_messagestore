@@ -395,7 +395,7 @@ void QueueStore::sweep_caches() {
             tbb::parallel_for(queues_.range(grainsize), [](const RangeType& r) {
                 for (auto it = r.begin(); it != r.end(); ++it) {
                     auto mq_ptr = *it;
-                    mq->flush_last_page();
+                    mq_ptr->flush_last_page();
                 }
             });
         });
@@ -406,7 +406,7 @@ void QueueStore::sweep_caches() {
 void QueueStore::put(const String& queue_name, const MemBlock& message) {
     if (!message.ptr) return;
     // mark cache's not cleared
-    cache_cleared.put(false);
+    cache_cleared.store(false);
 
     auto q_ptr = find_or_create_queue(queue_name);
     q_ptr->put(message);
