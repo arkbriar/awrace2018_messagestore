@@ -128,7 +128,7 @@ void MessageQueue::flush_queue_metadata(int fd) const {
     ::write(fd, buf, buf_len);
 }
 
-void MessageQueue::load_queue_metadata(const Metadata& hmetadatadr, const char* buf) {
+void MessageQueue::load_queue_metadata(const Metadata& metadata, const char* buf) {
     queue_id_ = metadata.queue_id;
     cur_data_page_off_ = metadata.page_offset;
     cur_data_slot_off_ = metadata.slot_offset;
