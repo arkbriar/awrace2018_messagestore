@@ -219,10 +219,10 @@ protected:
     uint16_t extract_message_length(const char*& ptr);
 
     // Struct and methods for save/load metadata of this queue
-    struct MessageQueueIndexHeader;
-    void construct_header(MessageQueueIndexHeader& hdr) const;
+    struct Metadata;
+    void construct_metadata(Metadata& metadata) const;
     void flush_queue_metadata(int fd) const;
-    void load_queue_metadata(const MessageQueueIndexHeader& hdr, const char* buf);
+    void load_queue_metadata(const Metadata& metadata, const char* buf);
 
 private:
     uint32_t queue_id_ = -1;

@@ -93,34 +93,34 @@ MessageQueue::MessageQueue() {}
 MessageQueue::MessageQueue(uint32_t queue_id, const String& queue_name, PagedFile* data_file)
     : queue_id_(queue_id), queue_name_(queue_name), data_file_(data_file) {}
 
-struct __attribute__((__packed__)) MessageQueue::MessageQueueIndexHeader {
+struct __attribute__((__packed__)) MessageQueue::Metadata {
     uint32_t queue_id;
     uint32_t name_size;
     uint64_t page_offset;
     uint16_t slot_offset;
     uint32_t indices_size;
 
-    uint64_t index_size() const { return sizeof(MessageQueueIndexHeader) + extra_length(); }
+    uint64_t index_size() const { return sizeof(Metadata) + extra_length(); }
     uint64_t extra_length() const { return name_size + indices_size * sizeof(MessagePageIndex); }
 };
 
-void MessageQueue::construct_header(MessageQueueIndexHeader& hdr) const {
-    hdr.queue_id = queue_id_;
-    hdr.name_size = queue_name_.size();
-    hdr.page_offset = cur_data_page_off_;
-    hdr.slot_offset = cur_data_slot_off_;
-    hdr.indices_size = paged_message_indices_.size();
+void MessageQueue::construct_metadata(Metadata& metadata) const {
+    metadata.queue_id = queue_id_;
+    metadata.name_size = queue_name_.size();
+    metadata.page_offset = cur_data_page_off_;
+    metadata.slot_offset = cur_data_slot_off_;
+    metadata.indices_size = paged_message_indices_.size();
 }
 
 void MessageQueue::flush_queue_metadata(int fd) const {
-    MessageQueueIndexHeader header;
-    construct_header(header);
-    size_t buf_len = header.index_size();
+    Metadata metadata;
+    construct_metadata(metadata);
+    size_t buf_len = metadata.index_size();
 
     char* buf[buf_len];
-    buffer::write_to_buf(buf, header);
-    memcpy(buf + sizeof(MessageQueueIndexHeader), queue_name_.c_str(), header.name_size);
-    auto ptr = buf + sizeof(MessageQueueIndexHeader) + header.name_size;
+    buffer::write_to_buf(buf, metadata);
+    memcpy(buf + sizeof(Metadata), queue_name_.c_str(), metadata.name_size);
+    auto ptr = buf + sizeof(Metadata) + metadata.name_size;
     for (auto& index : paged_message_indices_) {
         buffer::write_to_buf(ptr, index);
         ptr += sizeof(index);
@@ -128,16 +128,16 @@ void MessageQueue::flush_queue_metadata(int fd) const {
     ::write(fd, buf, buf_len);
 }
 
-void MessageQueue::load_queue_metadata(const MessageQueueIndexHeader& hdr, const char* buf) {
-    queue_id_ = hdr.queue_id;
-    cur_data_page_off_ = hdr.page_offset;
-    cur_data_slot_off_ = hdr.slot_offset;
-    queue_name_ = String(buf, hdr.name_size);
-    paged_message_indices_.reserve(hdr.indices_size);
+void MessageQueue::load_queue_metadata(const Metadata& hmetadatadr, const char* buf) {
+    queue_id_ = metadata.queue_id;
+    cur_data_page_off_ = metadata.page_offset;
+    cur_data_slot_off_ = metadata.slot_offset;
+    queue_name_ = String(buf, metadata.name_size);
+    paged_message_indices_.reserve(metadata.indices_size);
 
     MessagePageIndex msg_index;
-    auto ptr = buf + hdr.name_size;
-    for (uint32_t i = 0; i < hdr.indices_size; ++i) {
+    auto ptr = buf + metadata.name_size;
+    for (uint32_t i = 0; i < metadata.indices_size; ++i) {
         buffer::read_from_buf(ptr, msg_index);
         paged_message_indices_.push_back(msg_index);
         ptr += sizeof(MessagePageIndex);
@@ -340,16 +340,16 @@ void QueueStore::load_queues_metadatas() {
     int fd = ::open(index_file_path().c_str(), O_RDONLY);
     if (fd < 0) return;
 
-    char header_buf[sizeof(MessageQueue::MessageQueueIndexHeader)];
-    while (::read(fd, header_buf, sizeof(header_buf)) == sizeof(header_buf)) {
-        MessageQueue::MessageQueueIndexHeader header;
-        buffer::read_from_buf(header_buf, header);
-        char extra_buf[header.extra_length()];
+    char buf[sizeof(MessageQueue::Metadata)];
+    while (::read(fd, buf, sizeof(buf)) == sizeof(buf)) {
+        MessageQueue::Metadata metadata;
+        buffer::read_from_buf(buf, metadata);
+        char extra_buf[metadata.extra_length()];
         if (::read(fd, extra_buf, sizeof(extra_buf)) != (ssize_t)sizeof(extra_buf)) return;
 
         // set up queue
         SharedPtr<MessageQueue> q = std::make_shared<MessageQueue>();
-        q->load_queue_metadata(header, extra_buf);
+        q->load_queue_metadata(metadata, extra_buf);
         q->set_data_file(data_files_[q->get_queue_id() % DATA_FILE_SPLITS]);
 
         // add this queue
