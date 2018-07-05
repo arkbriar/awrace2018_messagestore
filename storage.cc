@@ -91,34 +91,6 @@ void PagedFile::mapped_write(uint64_t offset, const FilePageWriter& writer) {
 
 uint64_t PagedFile::next_page_offset() { return page_offset.next(); }
 
-FilePageBuffer::FilePageBuffer(size_t capacity) : capacity_(capacity) {}
-
-FilePage* FilePageBuffer::allocate() {
-    // if there are free pages, pop one
-    FilePage* page_ptr = nullptr;
-    if (free_pages_.try_pop(page_ptr)) {
-        assert(page_ptr != nullptr);
-        return page_ptr;
-    }
-
-    // otherwise try new a page
-    if (page_size_.load() < capacity_) {
-        if (page_size_.fetch_add(1) < capacity_) {
-            page_ptr = new FilePage();
-            return page_ptr;
-        } else {
-            page_size_.fetch_add(-1);
-        }
-    }
-
-    // otherwise return nullptr
-    return nullptr;
-}
-
-void FilePageBuffer::free(FilePage* page) {
-    if (page) free_pages_.push(page);
-}
-
 MessageQueue::MessageQueue() {}
 
 MessageQueue::MessageQueue(uint32_t queue_id, const String& queue_name, PagedFile* data_file)
@@ -313,21 +285,22 @@ void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, ui
     }
 }
 
+static thread_local ConcurrentHashMap<uint32_t, SharedPtr<FilePage>> reading_pages;
+
 Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
     // flush and release the last writing page
     if (last_page_) flush_last_page();
 
     // get current thread's reading buffer
-    decltype(read_page_)::const_accessor ac;
-    std::thread::id this_thread_id = std::this_thread::get_id();
-    read_page_.find(ac, this_thread_id);
-    FilePage* page_ptr = ac.empty() ? nullptr : ac->second;
-    if (page_ptr == nullptr && page_buffer_) {
+    decltype(reading_pages)::const_accessor ac;
+    reading_pages.find(ac, queue_id_);
+    auto page_ptr = ac.empty() ? nullptr : ac->second;
+    if (page_ptr == nullptr) {
         // try allocate one
-        page_ptr = page_buffer_->allocate();
+        page_ptr = SharedPtr<FilePage>(new FilePage());
         if (page_ptr) {
             page_ptr->header.offset = NEGATIVE_OFFSET;
-            read_page_.insert(ac, std::make_pair(this_thread_id, page_ptr));
+            reading_pages.insert(ac, std::make_pair(queue_id_, page_ptr));
         }
     }
 
@@ -335,11 +308,6 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
 
     // messages from offset is not found
     if (first_page_idx == paged_message_indices_.size()) {
-        // free cached page if this query is invalid
-        if (page_ptr) {
-            page_buffer_->free(page_ptr);
-            read_page_.erase(ac);
-        }
         return Vector<MemBlock>();
     }
 
@@ -360,7 +328,7 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
         auto& index = paged_message_indices_[page_idx];
         if (page_ptr) {
             if (page_ptr->header.offset != index.page_offset) {
-                data_file_->read(index.page_offset, page_ptr);
+                data_file_->read(index.page_offset, page_ptr.get());
             }
             assert(page_ptr->header.offset == index.page_offset);
             read_msgs(index, offset, number, page_ptr->content, msgs);
@@ -375,10 +343,7 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
 
     // after retriving last message, free current page buffer
     if (offset == paged_message_indices_.back().total_msg_size()) {
-        if (page_ptr) {
-            page_buffer_->free(page_ptr);
-            read_page_.erase(ac);
-        }
+        if (page_ptr) reading_pages.erase(ac);
     }
 
     return msgs;
@@ -458,11 +423,10 @@ void QueueStore::sweep_caches() {
         std::thread sweeper([this]() {
             size_t grainsize = queues_.size() / std::thread::hardware_concurrency();
             using RangeType = ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_range_type;
-            tbb::parallel_for(queues_.range(grainsize), [this](const RangeType& r) {
+            tbb::parallel_for(queues_.range(grainsize), [](const RangeType& r) {
                 for (auto it = r.begin(); it != r.end(); ++it) {
                     auto mq_ptr = it->second;
                     mq_ptr->flush_last_page();
-                    mq_ptr->set_file_page_buffer(&page_buffer);
                 }
             });
         });
