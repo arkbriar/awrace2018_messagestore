@@ -268,7 +268,7 @@ protected:
 
     // sweep all writing last pages of all queues, to release more memory
     // for reading
-    Atomic<bool> cache_cleared = false;
+    Atomic<bool> cache_cleared{false};
     void sweep_caches();
 
 private:
