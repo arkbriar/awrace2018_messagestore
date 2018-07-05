@@ -1,6 +1,7 @@
 #include "storage.h"
 
-#include <lz4.h>
+#include <thread>
+#include "tbb/parallel_for_each.h"
 
 namespace race2018 {
 
@@ -91,6 +92,57 @@ MessageQueue::MessageQueue() {}
 
 MessageQueue::MessageQueue(uint32_t queue_id, const String& queue_name, PagedFile* data_file)
     : queue_id_(queue_id), queue_name_(queue_name), data_file_(data_file) {}
+
+struct __attribute__((__packed__)) MessageQueue::MessageQueueIndexHeader {
+    uint32_t queue_id;
+    uint32_t name_size;
+    uint64_t page_offset;
+    uint16_t slot_offset;
+    uint32_t indices_size;
+
+    uint64_t index_size() const { return sizeof(MessageQueueIndexHeader) + extra_length(); }
+    uint64_t extra_length() const { return name_size + indices_size * sizeof(MessagePageIndex); }
+};
+
+void MessageQueue::construct_header(MessageQueueIndexHeader& hdr) const {
+    hdr.queue_id = queue_id_;
+    hdr.name_size = queue_name_.size();
+    hdr.page_offset = cur_data_page_off_;
+    hdr.slot_offset = cur_data_slot_off_;
+    hdr.indices_size = paged_message_indices_.size();
+}
+
+void MessageQueue::flush_queue_metadata(int fd) const {
+    MessageQueueIndexHeader header;
+    construct_header(header);
+    size_t buf_len = header.index_size();
+
+    char* buf[buf_len];
+    buffer::write_to_buf(buf, header);
+    memcpy(buf + sizeof(MessageQueueIndexHeader), queue_name_.c_str(), header.name_size);
+    auto ptr = buf + sizeof(MessageQueueIndexHeader) + header.name_size;
+    for (auto& index : paged_message_indices_) {
+        buffer::write_to_buf(ptr, index);
+        ptr += sizeof(index);
+    }
+    ::write(fd, buf, buf_len);
+}
+
+void MessageQueue::load_queue_metadata(const MessageQueueIndexHeader& hdr, const char* buf) {
+    queue_id_ = hdr.queue_id;
+    cur_data_page_off_ = hdr.page_offset;
+    cur_data_slot_off_ = hdr.slot_offset;
+    queue_name_ = String(buf, hdr.name_size);
+    paged_message_indices_.reserve(hdr.indices_size);
+
+    MessagePageIndex msg_index;
+    auto ptr = buf + hdr.name_size;
+    for (uint32_t i = 0; i < hdr.indices_size; ++i) {
+        buffer::read_from_buf(ptr, msg_index);
+        paged_message_indices_.push_back(msg_index);
+        ptr += sizeof(MessagePageIndex);
+    }
+}
 
 uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_offset,
                                          uint16_t size) {
@@ -263,13 +315,6 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
                          });
     }
 
-#ifdef __linux__
-    // try to read ahead next page
-    // if (last_page_idx + 1 != paged_message_indices_.size()) {
-    //     data_file_->readahead(paged_message_indices_[last_page_idx + 1].page_offset);
-    // }
-#endif
-
     return msgs;
 }
 
@@ -341,13 +386,27 @@ SharedPtr<MessageQueue> QueueStore::find_queue(const String& queue_name) const {
     return found ? ac->second : nullptr;
 }
 
+void QueueStore::sweep_caches() {
+    bool expected = false;
+    if (cache_cleared.compare_exchange_strong(expected, true)) {
+        tbb::parallel_for_each(queues_,
+                               [](const SharedPtr<MessageQueue>& mq) { mq->flush_last_page(); });
+    }
+}
+
 void QueueStore::put(const String& queue_name, const MemBlock& message) {
     if (!message.ptr) return;
+    // mark cache's not cleared
+    cache_cleared.put(false);
+
     auto q_ptr = find_or_create_queue(queue_name);
     q_ptr->put(message);
 }
 
 Vector<MemBlock> QueueStore::get(const String& queue_name, long offset, long size) {
+    // sweep all queues' writing cache
+    if (!cache_cleared.load()) sweep_caches();
+
     auto q_ptr = find_queue(queue_name);
     if (q_ptr) return q_ptr->get(offset, size);
     // return empty list when queue is not found
