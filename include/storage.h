@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <cerrno>
 #include <mutex>
+#include <thread>
 
 #include "cache/concurrent-scalable-cache.h"
 #include "common.h"
@@ -104,7 +105,9 @@ private:
 #define FILE_PAGE_SIZE KILO_BYTES(4)
 
 // File page header
-struct __attribute__((__packed__)) FilePageHeader {};
+struct __attribute__((__packed__)) FilePageHeader {
+    uint64_t offset;
+};
 
 #define FILE_PAGE_HEADER_SIZE sizeof(FilePageHeader)
 #define FILE_PAGE_AVALIABLE_SIZE (FILE_PAGE_SIZE - FILE_PAGE_HEADER_SIZE)
@@ -176,6 +179,26 @@ private:
     String file_;
 };
 
+// Page buffer, useful for reading
+class FilePageBuffer {
+public:
+    FilePageBuffer(size_t capacity);
+
+    size_t capacity() const { return capacity_; }
+    FilePage* allocate();
+    void free(FilePage* page);
+
+private:
+    ConcurrentQueue<FilePage*> free_pages_;
+    Atomic<size_t> page_size_{0};
+    const size_t capacity_;
+};
+
+/* -----------------------------------------------
+ * MessageQueue and QueueStore, to divide the storage
+ * into individual queues.
+ ------------------------------------------------*/
+
 class QueueStore;
 struct __attribute__((__packed__)) MessagePageIndex {
     uint64_t page_offset;
@@ -185,6 +208,12 @@ struct __attribute__((__packed__)) MessagePageIndex {
     MessagePageIndex(uint64_t page_offset, uint64_t prev_total_msg_size)
         : page_offset(page_offset), prev_total_msg_size(prev_total_msg_size) {}
     uint64_t total_msg_size() const { return prev_total_msg_size + msg_size; }
+};
+
+class ThreadIdHashCompare {
+public:
+    bool equal(const std::thread::id& a, const std::thread::id& b) const { return a == b; }
+    size_t hash(const std::thread::id& a) { return std::hash<std::thread::id>{}(a); }
 };
 
 class MessageQueue {
@@ -223,6 +252,7 @@ protected:
     void construct_metadata(Metadata& metadata) const;
     void flush_queue_metadata(int fd) const;
     void load_queue_metadata(const Metadata& metadata, const char* buf);
+    void set_file_page_buffer(FilePageBuffer* page_buffer) { page_buffer_ = page_buffer; }
 
 private:
     uint32_t queue_id_ = -1;
@@ -235,13 +265,19 @@ private:
     // Write buffer
     std::mutex wq_mutex_;
     FilePage* last_page_;
+
+    // Read buffer
+    ConcurrentHashMap<std::thread::id, FilePage*, ThreadIdHashCompare> read_page_;
+    FilePageBuffer* volatile page_buffer_;
+
     // Paged message index
     Vector<MessagePageIndex> paged_message_indices_;
     // Date file
     PagedFile* data_file_;
 };
 
-#define DATA_FILE_SPLITS 500
+#define DATA_FILE_SPLITS 100
+#define FILE_PAGE_BUFFER_SIZE 1000000
 
 class QueueStore {
 public:
@@ -272,6 +308,8 @@ protected:
     void sweep_caches();
 
 private:
+    FilePageBuffer page_buffer{FILE_PAGE_BUFFER_SIZE};
+
     String location_;
     PagedFile* data_files_[DATA_FILE_SPLITS];
     SteppedValue<uint32_t> next_queue_id_{1};

@@ -52,12 +52,8 @@ template <class T>
 using Atomic = std::atomic<T>;
 
 // Concurrent containers
-template <class K, class V>
-using ConcurrentHashMap = tbb::concurrent_hash_map<K, V>;
-template <class K, class V>
-using ConcurrentHashMapAccessor = typename ConcurrentHashMap<K, V>::accessor;
-template <class K, class V>
-using ConstConcurrentHashMapAccessor = typename ConcurrentHashMap<K, V>::const_accessor;
+template <class K, class V, class C = tbb::tbb_hash_compare<K>>
+using ConcurrentHashMap = tbb::concurrent_hash_map<K, V, C>;
 template <class K, class V>
 using ConcurrentUnorderedMap = tbb::concurrent_unordered_map<K, V>;
 template <class T>
