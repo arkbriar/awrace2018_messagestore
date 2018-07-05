@@ -162,6 +162,8 @@ public:
     void mapped_write(uint64_t offset, const FilePageWriter& writer);
     uint64_t next_page_offset();
 #ifdef __linux__
+    // use this carefully, because read throughput is not large and memory is
+    // not large enough
     void readahead(uint64_t offset) { ::readahead(fd_, offset, FILE_PAGE_SIZE); }
 #endif
 
@@ -216,58 +218,11 @@ protected:
     // Methods for extracting message length
     uint16_t extract_message_length(const char*& ptr);
 
-    struct __attribute__((__packed__)) MessageQueueIndexHeader {
-        uint32_t queue_id;
-        uint32_t name_size;
-        uint64_t page_offset;
-        uint16_t slot_offset;
-        uint32_t indices_size;
-
-        uint64_t index_size() const { return sizeof(MessageQueueIndexHeader) + extra_length(); }
-        uint64_t extra_length() const {
-            return name_size + indices_size * sizeof(MessagePageIndex);
-        }
-    };
-
-    void construct_header(MessageQueueIndexHeader& hdr) {
-        hdr.queue_id = queue_id_;
-        hdr.name_size = queue_name_.size();
-        hdr.page_offset = cur_data_page_off_;
-        hdr.slot_offset = cur_data_slot_off_;
-        hdr.indices_size = paged_message_indices_.size();
-    }
-
-    void flush_queue_metadata(int fd) {
-        MessageQueueIndexHeader header;
-        construct_header(header);
-        size_t buf_len = header.index_size();
-
-        char* buf[buf_len];
-        buffer::write_to_buf(buf, header);
-        memcpy(buf + sizeof(MessageQueueIndexHeader), queue_name_.c_str(), header.name_size);
-        auto ptr = buf + sizeof(MessageQueueIndexHeader) + header.name_size;
-        for (auto& index : paged_message_indices_) {
-            buffer::write_to_buf(ptr, index);
-            ptr += sizeof(index);
-        }
-        ::write(fd, buf, buf_len);
-    }
-
-    void load_queue_metadata(const MessageQueueIndexHeader& hdr, const char* buf) {
-        queue_id_ = hdr.queue_id;
-        cur_data_page_off_ = hdr.page_offset;
-        cur_data_slot_off_ = hdr.slot_offset;
-        queue_name_ = String(buf, hdr.name_size);
-        paged_message_indices_.reserve(hdr.indices_size);
-
-        MessagePageIndex msg_index;
-        auto ptr = buf + hdr.name_size;
-        for (uint32_t i = 0; i < hdr.indices_size; ++i) {
-            buffer::read_from_buf(ptr, msg_index);
-            paged_message_indices_.push_back(msg_index);
-            ptr += sizeof(MessagePageIndex);
-        }
-    }
+    // Struct and methods for save/load metadata of this queue
+    struct MessageQueueIndexHeader;
+    void construct_header(MessageQueueIndexHeader& hdr) const;
+    void flush_queue_metadata(int fd) const;
+    void load_queue_metadata(const MessageQueueIndexHeader& hdr, const char* buf);
 
 private:
     uint32_t queue_id_ = -1;
@@ -310,6 +265,11 @@ protected:
     void load_queues_metadatas();
     // flush all queues' metadatas to disk file index.data
     void flush_queues_metadatas();
+
+    // sweep all writing last pages of all queues, to release more memory
+    // for reading
+    Atomic<bool> cache_cleared{false};
+    void sweep_caches();
 
 private:
     String location_;
