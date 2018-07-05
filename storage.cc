@@ -361,8 +361,6 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
         if (page_ptr) {
             if (page_ptr->header.offset != index.page_offset) {
                 data_file_->read(index.page_offset, page_ptr);
-            } else {
-                LOG("skip once");
             }
             assert(page_ptr->header.offset == index.page_offset);
             read_msgs(index, offset, number, page_ptr->content, msgs);
