@@ -241,7 +241,7 @@ private:
     PagedFile* data_file_;
 };
 
-#define DATA_FILE_SPLITS 100
+#define DATA_FILE_SPLITS 500
 
 class QueueStore {
 public:
