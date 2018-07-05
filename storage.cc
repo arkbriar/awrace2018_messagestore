@@ -394,7 +394,7 @@ void QueueStore::sweep_caches() {
             using RangeType = ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_range_type;
             tbb::parallel_for(queues_.range(grainsize), [](const RangeType& r) {
                 for (auto it = r.begin(); it != r.end(); ++it) {
-                    auto mq_ptr = *it;
+                    auto mq_ptr = it->second;
                     mq_ptr->flush_last_page();
                 }
             });
