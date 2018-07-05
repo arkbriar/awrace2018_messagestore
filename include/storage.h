@@ -161,6 +161,9 @@ public:
     void mapped_read(uint64_t offset, const FilePageReader& reader);
     void mapped_write(uint64_t offset, const FilePageWriter& writer);
     uint64_t next_page_offset();
+#ifdef __linux__
+    void readahead(uint64_t offset) { ::readahead(fd_, offset, FILE_PAGE_SIZE); }
+#endif
 
 protected:
     SteppedValue<uint64_t> page_offset{FILE_PAGE_SIZE};
