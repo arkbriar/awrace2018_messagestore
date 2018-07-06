@@ -91,12 +91,10 @@ void PagedFile::mapped_write(uint64_t offset, const FilePageWriter& writer) {
 
 uint64_t PagedFile::next_page_offset() { return page_offset.next(); }
 
-MessageQueue::MessageQueue() { paged_message_indices_.emplace_back(NEGATIVE_OFFSET, 0); }
+MessageQueue::MessageQueue() {}
 
 MessageQueue::MessageQueue(uint32_t queue_id, const String& queue_name, PagedFile* data_file)
-    : queue_id_(queue_id), queue_name_(queue_name), data_file_(data_file) {
-    paged_message_indices_.emplace_back(NEGATIVE_OFFSET, 0);
-}
+    : queue_id_(queue_id), queue_name_(queue_name), data_file_(data_file) {}
 
 struct __attribute__((__packed__)) MessageQueue::Metadata {
     uint32_t queue_id;
@@ -209,6 +207,11 @@ void MessageQueue::put(const MemBlock& message) {
     // maximum support message size of
     assert(message.size <= 4000);
 
+    if (paged_message_indices_.empty()) {
+        // create the first index
+        paged_message_indices_.emplace_back(NEGATIVE_OFFSET, 0);
+    }
+
     uint16_t msg_size = message.size + 1;
     // use 2 bytes to record message length >= 128,
     // and use 1 byte to record message length < 128
@@ -221,7 +224,6 @@ void MessageQueue::put(const MemBlock& message) {
         flush_last_page(false);
 
         // create a new paged message index
-
         auto& prev_index = paged_message_indices_.back();
         paged_message_indices_.emplace_back(NEGATIVE_OFFSET, prev_index.total_msg_size());
     }
