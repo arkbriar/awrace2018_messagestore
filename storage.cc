@@ -1,8 +1,8 @@
 #include "storage.h"
 
 #include <snappy.h>
-#include <thread>
 #include <tbb/parallel_for.h>
+#include <thread>
 
 namespace race2018 {
 
@@ -219,8 +219,9 @@ void MessageQueue::put(const MemBlock& message) {
 
     char msg_ptr[snappy::MaxCompressedLength(message.size)];
     size_t compressed_size = 0;
-    snappy::RawCompress((const char*)msg.ptr, msg.size, msg_ptr, compressed_size);
+    snappy::RawCompress((const char*)message.ptr, message.size, msg_ptr, &compressed_size);
     assert(compressed_size > 0 && compressed_size <= 4000);
+    DLOG("compressed from %ld to %ld", message.size, compressed_size);
     // free raw message
     ::free(message.ptr);
 
@@ -289,11 +290,11 @@ void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, ui
 
         // uncompress message
         size_t raw_len;
-        snappy::GetUncompressedLength(begin, msg_size, raw_len);
+        snappy::GetUncompressedLength(begin, msg_size, &raw_len);
         MemBlock block;
         block.ptr = new char[raw_len];
         block.size = raw_len;
-        bool uncompressed = snappy::RawUncompress(begin, msg_size, msg_ptr);
+        bool uncompressed = snappy::RawUncompress(begin, msg_size, (char*)block.ptr);
         assert(uncompressed);
 
         msgs.push_back(block);
