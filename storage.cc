@@ -333,11 +333,6 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
     // flush and release the last writing page
     if (last_page_) flush_last_page();
 
-    // shrink the index to save more memory
-    if (paged_message_indices_.capacity() > paged_message_indices_.size()) {
-        paged_message_indices_.shrink_to_fit();
-    }
-
     // get current thread's reading buffer
     auto it = reading_pages.find(queue_id_);
     auto page_ptr = it == reading_pages.end() ? nullptr : it->second;
