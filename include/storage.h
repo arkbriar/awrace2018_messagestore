@@ -104,11 +104,6 @@ private:
 #define TERA_BYTES(n) (uint64_t(n) << 40)
 // must be power of 2
 #define FILE_PAGE_SIZE KILO_BYTES(4)
-// must be power of 2
-#define FILE_PAGE_PER_EXTENT 2
-#define EXTENT_SIZE (FILE_PAGE_PER_EXTENT * FILE_PAGE_SIZE)
-#define PAGE_FILE_OFFSET_IN_EXTENT(page_offset) (page_offset & (EXTENT_SIZE - 1))
-#define PAGE_INDEX_IN_EXTENT(page_offset) (PAGE_FILE_OFFSET_IN_EXTENT(page_offset) / FILE_PAGE_SIZE)
 
 // File page header
 struct __attribute__((__packed__)) FilePageHeader {
@@ -123,12 +118,11 @@ struct __attribute__((__packed__)) FilePage {
     FilePageHeader header;
     char content[FILE_PAGE_AVALIABLE_SIZE];
 };
-#define FILE_PAGE_SLOT_OFFSET_OF(offset) (offset & (FILE_PAGE_SIZE - 1))
-#define FILE_PAGE_OFFSET_OF(offset) \
-    (offset - FILE_PAGE_HEADER_SIZE - FILE_PAGE_SLOT_OFFSET_OF(offset))
+#define FILE_PAGE_SLOT_OFFSET_OF(offset) (offset & (FILE_PAGE_SIZE - 1) - FILE_PAGE_HEADER_SIZE)
+#define FILE_PAGE_OFFSET_OF(offset) (offset - (offset & (FILE_PAGE_SIZE - 1))
 #define FILE_PAGE_OF_PTR(ptr) ((FilePage*)ptr)
 #define FILE_OFFSET_OF(page_offset, slot_offset) (page_offset + FILE_PAGE_HEADER_SIZE + slot_offset)
-
+#define NEGATIVE_OFFSET uint64_t(-1LL)
 #define PAGE_OFFSET_LIMIT TERA_BYTES(1)
 
 extern void* map_file_page(int fd, size_t offset, bool readonly);
@@ -152,8 +146,6 @@ private:
     FilePage* file_page_ = nullptr;
 };
 
-#define NEGATIVE_OFFSET uint64_t(-1LL)
-
 using FilePageReader = std::function<void(const char*)>;
 using FilePageWriter = std::function<void(char*)>;
 class PagedFile {
@@ -169,8 +161,7 @@ public:
     void write(uint64_t offset, const FilePage* page);
     void mapped_read(uint64_t offset, const FilePageReader& reader);
     void mapped_write(uint64_t offset, const FilePageWriter& writer);
-    /* uint64_t next_page_offset(); */
-    uint64_t next_extent_offset();
+    uint64_t next_page_offset();
 #ifdef __linux__
     // use this carefully, because read throughput is not large and memory is
     // not large enough
@@ -178,8 +169,7 @@ public:
 #endif
 
 protected:
-    /* SteppedValue<uint64_t> page_offset{FILE_PAGE_SIZE}; */
-    SteppedValue<uint64_t> extent_offset{EXTENT_SIZE};
+    SteppedValue<uint64_t> page_offset{FILE_PAGE_SIZE};
 
 private:
     int fd_ = -1;
@@ -220,12 +210,14 @@ protected:
     void read_msgs(const MessagePageIndex& index, uint64_t& offset, uint64_t& num, const char* ptr,
                    Vector<MemBlock>& msgs);
     size_t binary_search_indices(uint64_t msg_offset) const;
-    // Methods for message slots in data page
-    uint64_t next_message_slot(uint64_t& page_offset, uint16_t& slot_offset, uint16_t size);
+    // Methods for message slots in data page, true indicates page is full
+    // and a new page's needed
+    bool next_message_slot(uint16_t& slot_offset, uint16_t size);
     // Methods for write/flushing data
     void write_to_last_page(const MemBlock& msg, uint16_t slot_offset);
-    void flush_last_page(uint64_t page_offset, bool release);
-    void flush_last_page() { flush_last_page(cur_data_page_off_, true); }
+    // allocate next page, flush last page in last_page_ and set index
+    void flush_last_page(bool release);
+    void flush_last_page();
     // Methods for QueueStore to initialize id and name when it
     // create a new queue.
     void set_queue_id(uint32_t queue_id) { this->queue_id_ = queue_id; }
@@ -245,7 +237,6 @@ private:
     String queue_name_;
 
     // Cursors for writing data
-    uint64_t cur_data_page_off_ = NEGATIVE_OFFSET;
     uint16_t cur_data_slot_off_ = 0;
 
     // Write buffer
