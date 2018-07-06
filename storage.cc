@@ -89,7 +89,7 @@ void PagedFile::mapped_write(uint64_t offset, const FilePageWriter& writer) {
     }
 }
 
-uint64_t PagedFile::next_extent_offset() { return extent_offset.next(); }
+uint64_t PagedFile::next_page_offset() { return page_offset.next(); }
 
 MessageQueue::MessageQueue() {}
 
@@ -99,7 +99,6 @@ MessageQueue::MessageQueue(uint32_t queue_id, const String& queue_name, PagedFil
 struct __attribute__((__packed__)) MessageQueue::Metadata {
     uint32_t queue_id;
     uint32_t name_size;
-    uint64_t page_offset;
     uint16_t slot_offset;
     uint32_t indices_size;
 
@@ -110,7 +109,6 @@ struct __attribute__((__packed__)) MessageQueue::Metadata {
 void MessageQueue::construct_metadata(Metadata& metadata) const {
     metadata.queue_id = queue_id_;
     metadata.name_size = queue_name_.size();
-    metadata.page_offset = cur_data_page_off_;
     metadata.slot_offset = cur_data_slot_off_;
     metadata.indices_size = paged_message_indices_.size();
 }
@@ -133,7 +131,6 @@ void MessageQueue::flush_queue_metadata(int fd) const {
 
 void MessageQueue::load_queue_metadata(const Metadata& metadata, const char* buf) {
     queue_id_ = metadata.queue_id;
-    cur_data_page_off_ = metadata.page_offset;
     cur_data_slot_off_ = metadata.slot_offset;
     queue_name_ = String(buf, metadata.name_size);
     paged_message_indices_.reserve(metadata.indices_size);
