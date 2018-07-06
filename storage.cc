@@ -89,7 +89,7 @@ void PagedFile::mapped_write(uint64_t offset, const FilePageWriter& writer) {
     }
 }
 
-uint64_t PagedFile::next_extent_offset() { return extent_offset.next(); }
+uint64_t PagedFile::next_page_offset() { return page_offset.next(); }
 
 MessageQueue::MessageQueue() {}
 
@@ -99,7 +99,6 @@ MessageQueue::MessageQueue(uint32_t queue_id, const String& queue_name, PagedFil
 struct __attribute__((__packed__)) MessageQueue::Metadata {
     uint32_t queue_id;
     uint32_t name_size;
-    uint64_t page_offset;
     uint16_t slot_offset;
     uint32_t indices_size;
 
@@ -110,7 +109,6 @@ struct __attribute__((__packed__)) MessageQueue::Metadata {
 void MessageQueue::construct_metadata(Metadata& metadata) const {
     metadata.queue_id = queue_id_;
     metadata.name_size = queue_name_.size();
-    metadata.page_offset = cur_data_page_off_;
     metadata.slot_offset = cur_data_slot_off_;
     metadata.indices_size = paged_message_indices_.size();
 }
@@ -133,13 +131,13 @@ void MessageQueue::flush_queue_metadata(int fd) const {
 
 void MessageQueue::load_queue_metadata(const Metadata& metadata, const char* buf) {
     queue_id_ = metadata.queue_id;
-    cur_data_page_off_ = metadata.page_offset;
     cur_data_slot_off_ = metadata.slot_offset;
     queue_name_ = String(buf, metadata.name_size);
     paged_message_indices_.reserve(metadata.indices_size);
 
     MessagePageIndex msg_index;
     auto ptr = buf + metadata.name_size;
+    paged_message_indices_.clear();
     for (uint32_t i = 0; i < metadata.indices_size; ++i) {
         buffer::read_from_buf(ptr, msg_index);
         paged_message_indices_.push_back(msg_index);
@@ -147,48 +145,45 @@ void MessageQueue::load_queue_metadata(const Metadata& metadata, const char* buf
     }
 }
 
-uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_offset,
-                                         uint16_t size) {
+bool MessageQueue::next_message_slot(uint16_t& slot_offset, uint16_t size) {
     // first page will hold at most (queue_id / DATA_FILE_SPLITS) % 32 + 1 messages, this make write
     // more average. This leads to 32 timepoints of first flush. I call it flush fast.
-
     bool flush_fast =
         paged_message_indices_.size() == 1 &&
         paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x1f) + 1;
 
-    // deal with the following pages
-    if (cur_data_page_off_ == NEGATIVE_OFFSET ||
-        cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE || flush_fast) {
-        uint64_t prev_data_page_off = cur_data_page_off_;
-        // if this page is the last page in extent, then allocate next
-        // extent
-        if (cur_data_page_off_ == NEGATIVE_OFFSET ||
-            PAGE_INDEX_IN_EXTENT(cur_data_page_off_) == FILE_PAGE_PER_EXTENT - 1) {
-            cur_data_page_off_ = data_file_->next_extent_offset();
-        } else {
-            cur_data_page_off_ += FILE_PAGE_SIZE;
-        }
-        page_offset = cur_data_page_off_;
+    // if page is full or flush fast, then a new page should be allocated
+    if (cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE || flush_fast) {
         slot_offset = 0;
         cur_data_slot_off_ = size;
-        return prev_data_page_off;
+        return true;
     } else {
-        page_offset = cur_data_page_off_;
         slot_offset = cur_data_slot_off_;
         cur_data_slot_off_ += size;
-        return cur_data_page_off_;
+        return false;
     }
 }
 
-void MessageQueue::flush_last_page(uint64_t page_offset, bool release) {
+void MessageQueue::flush_last_page(bool release) {
+    if (!last_page_) return;
+    std::unique_lock<std::mutex> lock(wq_mutex_);
     if (!last_page_) return;
 
-    std::unique_lock<std::mutex> lock(wq_mutex_);
+    // allocate a new page and set paged message index correctly
+    uint64_t page_offset = data_file_->next_page_offset();
+    paged_message_indices_.back().page_offset = page_offset;
+
     // write all messages in this queue to page of page_offset
     data_file_->write(page_offset, last_page_);
     if (release) {
         delete last_page_;
         last_page_ = nullptr;
+    }
+}
+
+void MessageQueue::flush_last_page() {
+    if (!paged_message_indices_.empty()) {
+        flush_last_page(true);
     }
 }
 
@@ -212,26 +207,25 @@ void MessageQueue::put(const MemBlock& message) {
     // maximum support message size of
     assert(message.size <= 4000);
 
+    if (paged_message_indices_.empty()) {
+        // create the first index
+        paged_message_indices_.emplace_back(NEGATIVE_OFFSET, 0);
+    }
+
     uint16_t msg_size = message.size + 1;
     // use 2 bytes to record message length >= 128,
     // and use 1 byte to record message length < 128
     if (message.size >= 0x80) msg_size += 1;
 
-    uint64_t page_offset;
     uint16_t slot_offset;
-    uint64_t prev_page_offset = next_message_slot(page_offset, slot_offset, msg_size);
-    if (prev_page_offset != page_offset) {
-        // a new data page is allocated
-        // flush messages of previous page
-        flush_last_page(prev_page_offset, false);
+    bool needs_new_page = next_message_slot(slot_offset, msg_size);
+    if (needs_new_page) {
+        // a new data page should be allocated, and flush messages
+        flush_last_page(false);
 
         // create a new paged message index
-        uint64_t prev_total_msg_size = 0;
-        if (!paged_message_indices_.empty()) {
-            auto& prev_index = paged_message_indices_.back();
-            prev_total_msg_size = prev_index.total_msg_size();
-        }
-        paged_message_indices_.emplace_back(page_offset, prev_total_msg_size);
+        auto& prev_index = paged_message_indices_.back();
+        paged_message_indices_.emplace_back(NEGATIVE_OFFSET, prev_index.total_msg_size());
     }
 
     // write message into last page
