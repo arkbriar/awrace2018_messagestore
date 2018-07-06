@@ -3,6 +3,7 @@
 #include <snappy.h>
 #include <tbb/parallel_for.h>
 #include <thread>
+#include <map>
 
 namespace race2018 {
 
@@ -303,7 +304,7 @@ void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, ui
     }
 }
 
-static thread_local ConcurrentHashMap<uint32_t, SharedPtr<FilePage>> reading_pages;
+static thread_local std::map<uint32_t, SharedPtr<FilePage>> reading_pages;
 
 Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
     // flush and release the last writing page
@@ -315,9 +316,8 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
     }
 
     // get current thread's reading buffer
-    decltype(reading_pages)::const_accessor ac;
-    reading_pages.find(ac, queue_id_);
-    auto page_ptr = ac.empty() ? nullptr : ac->second;
+    auto it = reading_pages.find(queue_id_);
+    auto page_ptr = it == reading_pages.end() ? nullptr : it->second;
     if (page_ptr == nullptr) {
         // try allocate one
         try {
@@ -328,7 +328,7 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
         }
         if (page_ptr) {
             page_ptr->header.offset = NEGATIVE_OFFSET;
-            reading_pages.insert(ac, std::make_pair(queue_id_, page_ptr));
+            reading_pages.insert(std::make_pair(queue_id_, page_ptr));
         }
     }
 
@@ -371,7 +371,7 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
 
     // after retriving last message, free current page buffer
     if (offset == paged_message_indices_.back().total_msg_size()) {
-        if (page_ptr) reading_pages.erase(ac);
+        if (page_ptr) reading_pages.erase(queue_id_);
     }
 
     return msgs;
