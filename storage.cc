@@ -91,7 +91,9 @@ void PagedFile::mapped_write(uint64_t offset, const FilePageWriter& writer) {
 
 uint64_t PagedFile::next_page_offset() { return page_offset.next(); }
 
-MessageQueue::MessageQueue() {}
+MessageQueue::MessageQueue() {
+    paged_message_indices_.emplace_back(NEGATIVE_OFFSET, prev_total_msg_size);
+}
 
 MessageQueue::MessageQueue(uint32_t queue_id, const String& queue_name, PagedFile* data_file)
     : queue_id_(queue_id), queue_name_(queue_name), data_file_(data_file) {}
@@ -218,11 +220,9 @@ void MessageQueue::put(const MemBlock& message) {
         flush_last_page(false);
 
         // create a new paged message index
-        uint64_t prev_total_msg_size = 0;
-        if (!paged_message_indices_.empty()) {
-            auto& prev_index = paged_message_indices_.back();
-            prev_total_msg_size = prev_index.total_msg_size();
-        }
+
+        auto& prev_index = paged_message_indices_.back();
+        prev_total_msg_size = prev_index.total_msg_size();
         paged_message_indices_.emplace_back(NEGATIVE_OFFSET, prev_total_msg_size);
     }
 
