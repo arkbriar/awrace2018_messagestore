@@ -220,8 +220,7 @@ void MessageQueue::put(const MemBlock& message) {
         // create a new paged message index
 
         auto& prev_index = paged_message_indices_.back();
-        prev_total_msg_size = prev_index.total_msg_size();
-        paged_message_indices_.emplace_back(NEGATIVE_OFFSET, prev_total_msg_size);
+        paged_message_indices_.emplace_back(NEGATIVE_OFFSET, prev_index.total_msg_size());
     }
 
     // write message into last page
