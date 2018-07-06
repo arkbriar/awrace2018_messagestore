@@ -25,8 +25,7 @@ void unmap_file_page(void* addr) {
 }
 
 PagedFile::PagedFile(const String& file) : file_(file) {
-    int fd__ = ::open(file.c_str(), O_SYNC | O_RDWR | O_CREAT, 0644);
-    fd_ = fcntl( fd__, F_NOCACHE );
+    fd_ = ::open(file.c_str(), O_RDWR | O_CREAT, 0644);
     assert(fd_ > 0);
     // read file size
     struct stat s;
