@@ -251,7 +251,6 @@ private:
 };
 
 #define DATA_FILE_SPLITS 10
-#define FILE_PAGE_BUFFER_SIZE 1000000
 
 class QueueStore {
 public:
