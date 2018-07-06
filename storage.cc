@@ -1,7 +1,8 @@
 #include "storage.h"
 
+#include <snappy.h>
 #include <thread>
-#include "tbb/parallel_for.h"
+#include <tbb/parallel_for.h>
 
 namespace race2018 {
 
@@ -188,17 +189,21 @@ void MessageQueue::flush_last_page() {
 }
 
 void MessageQueue::write_to_last_page(const MemBlock& msg, uint16_t slot_offset) {
+    write_to_last_page((const char*)msg.ptr, msg.size, slot_offset);
+}
+
+void MessageQueue::write_to_last_page(const char* ptr, size_t size, uint16_t slot_offset) {
     if (!last_page_) {
         // lazy allocate page
         last_page_ = new FilePage();
     }
-    if (msg.size < 0x80) {
-        last_page_->content[slot_offset] = msg.size;
-        ::memcpy(last_page_->content + slot_offset + 1, msg.ptr, msg.size);
+    if (size < 0x80) {
+        last_page_->content[slot_offset] = size;
+        ::memcpy(last_page_->content + slot_offset + 1, ptr, size);
     } else {
-        last_page_->content[slot_offset] = ((msg.size >> 8) | 0x80);
-        last_page_->content[slot_offset + 1] = msg.size & 0xff;
-        ::memcpy(last_page_->content + slot_offset + 2, msg.ptr, msg.size);
+        last_page_->content[slot_offset] = ((size >> 8) | 0x80);
+        last_page_->content[slot_offset + 1] = size & 0xff;
+        ::memcpy(last_page_->content + slot_offset + 2, ptr, size);
     }
 }
 
@@ -212,7 +217,14 @@ void MessageQueue::put(const MemBlock& message) {
         paged_message_indices_.emplace_back(NEGATIVE_OFFSET, 0);
     }
 
-    uint16_t msg_size = message.size + 1;
+    char msg_ptr[snappy::MaxCompressedLength(message.size)];
+    size_t compressed_size = 0;
+    snappy::RawCompress((const char*)msg.ptr, msg.size, msg_ptr, compressed_size);
+    assert(compressed_size > 0 && compressed_size <= 4000);
+    // free raw message
+    ::free(message.ptr);
+
+    uint16_t msg_size = compressed_size + 1;
     // use 2 bytes to record message length >= 128,
     // and use 1 byte to record message length < 128
     if (message.size >= 0x80) msg_size += 1;
@@ -229,10 +241,7 @@ void MessageQueue::put(const MemBlock& message) {
     }
 
     // write message into last page
-    write_to_last_page(message, slot_offset);
-
-    // free message
-    ::free(message.ptr);
+    write_to_last_page(msg_ptr, compressed_size, slot_offset);
 
     ++paged_message_indices_.back().msg_size;
 }
@@ -277,7 +286,17 @@ void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, ui
     // read related messages to msgs
     while (num > 0 && size > 0) {
         uint16_t msg_size = extract_message_length(begin);
-        msgs.push_back(new_memblock(begin, msg_size));
+
+        // uncompress message
+        size_t raw_len;
+        snappy::GetUncompressedLength(begin, msg_size, raw_len);
+        MemBlock block;
+        block.ptr = new char[raw_len];
+        block.size = raw_len;
+        bool uncompressed = snappy::RawUncompress(begin, msg_size, msg_ptr);
+        assert(uncompressed);
+
+        msgs.push_back(block);
         begin += msg_size;
         ++cur_offset, ++offset, --num, --size;
     }
