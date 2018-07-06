@@ -102,7 +102,13 @@ private:
 #define MEGA_BYTES(n) (uint64_t(n) << 20)
 #define GIGA_BYTES(n) ((uint64_t(n)) << 30)
 #define TERA_BYTES(n) (uint64_t(n) << 40)
+// must be power of 2
 #define FILE_PAGE_SIZE KILO_BYTES(4)
+// must be power of 2
+#define FILE_PAGE_PER_EXTENT 4
+#define EXTENT_SIZE (FILE_PAGE_PER_EXTENT * FILE_PAGE_SIZE)
+#define PAGE_FILE_OFFSET_IN_EXTENT(page_offset) (page_offset & (EXTENT_SIZE - 1))
+#define PAGE_INDEX_IN_EXTENT(page_offset) (PAGE_FILE_OFFSET_IN_EXTENT(page_offset) / FILE_PAGE_SIZE)
 
 // File page header
 struct __attribute__((__packed__)) FilePageHeader {
@@ -163,7 +169,8 @@ public:
     void write(uint64_t offset, const FilePage* page);
     void mapped_read(uint64_t offset, const FilePageReader& reader);
     void mapped_write(uint64_t offset, const FilePageWriter& writer);
-    uint64_t next_page_offset();
+    /* uint64_t next_page_offset(); */
+    uint64_t next_extent_offset();
 #ifdef __linux__
     // use this carefully, because read throughput is not large and memory is
     // not large enough
@@ -171,7 +178,8 @@ public:
 #endif
 
 protected:
-    SteppedValue<uint64_t> page_offset{FILE_PAGE_SIZE};
+    /* SteppedValue<uint64_t> page_offset{FILE_PAGE_SIZE}; */
+    SteppedValue<uint64_t> extent_offset{EXTENT_SIZE};
 
 private:
     int fd_ = -1;
