@@ -1,6 +1,7 @@
 #include "storage.h"
 
 #include <snappy.h>
+#include <lz4.h>
 #include <tbb/parallel_for.h>
 #include <thread>
 #include <map>
@@ -150,9 +151,9 @@ void MessageQueue::load_queue_metadata(const Metadata& metadata, const char* buf
 bool MessageQueue::next_message_slot(uint16_t& slot_offset, uint16_t size) {
     // first page will hold at most (queue_id / DATA_FILE_SPLITS) % 64 + 1 messages, this make write
     // more average. This leads to 64 timepoints of first flush. I call it flush fast.
-    bool flush_fast =
-        paged_message_indices_.size() == 1 &&
-        paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x3f) + 1;
+    bool flush_fast = false;
+    /* paged_message_indices_.size() == 1 &&
+     * paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x3f) + 1; */
 
     // if page is full or flush fast, then a new page should be allocated
     if (cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE || flush_fast) {
@@ -208,6 +209,16 @@ void MessageQueue::write_to_last_page(const char* ptr, size_t size, uint16_t slo
     }
 }
 
+#define COMPRESS_USING_SNAPPY(msg, msg_ptr, compressed_size) \
+    char msg_ptr[snappy::MaxCompressedLength(message.size)]; \
+    size_t compressed_size = 0;                              \
+    snappy::RawCompress((const char*)msg.ptr, msg.size, msg_ptr, &compressed_size);
+
+#define COMPRESS_USING_LZ4(msg, msg_ptr, compressed_size) \
+    char msg_ptr[LZ4_compressBound(message.size)];        \
+    size_t compressed_size =                              \
+        LZ4_compress_default((const char*)msg.ptr, msg_ptr, msg.size, sizeof(msg_ptr));
+
 // put is sequential to support index verification
 void MessageQueue::put(const MemBlock& message) {
     // maximum support message size of
@@ -218,9 +229,8 @@ void MessageQueue::put(const MemBlock& message) {
         paged_message_indices_.emplace_back(NEGATIVE_OFFSET, 0);
     }
 
-    char msg_ptr[snappy::MaxCompressedLength(message.size)];
-    size_t compressed_size = 0;
-    snappy::RawCompress((const char*)message.ptr, message.size, msg_ptr, &compressed_size);
+    // COMPRESS_USING_SNAPPY(message, msg_ptr, compressed_size);
+    COMPRESS_USING_LZ4(message, msg_ptr, compressed_size);
     assert(compressed_size > 0 && compressed_size <= 4000);
     DLOG("compressed from %ld to %ld", message.size, compressed_size);
     // free raw message
@@ -270,6 +280,25 @@ uint16_t MessageQueue::extract_message_length(const char*& ptr) {
     }
 }
 
+#define UNCOMPRESS_USING_SNAPPY(_begin, _size, _out_msg)                           \
+    size_t raw_len;                                                                \
+    snappy::GetUncompressedLength(_begin, _size, &raw_len);                        \
+    _out_msg.ptr = new char[raw_len];                                              \
+    _out_msg.size = raw_len;                                                       \
+    bool uncompressed = snappy::RawUncompress(_begin, _size, (char*)_out_msg.ptr); \
+    if (!uncompressed) {                                                           \
+    }                                                                              \
+    assert(uncompressed);
+
+// FIXME this macro assumes that original message size is not larger than 2048
+#define UNCOMPRESS_USING_LZ4(_begin, _size, _out_msg)                              \
+    char lz4_out[2048];                                                            \
+    size_t raw_len = LZ4_decompress_safe(_begin, lz4_out, _size, sizeof(lz4_out)); \
+    assert(raw_len > 0);                                                           \
+    _out_msg.ptr = new char[raw_len];                                              \
+    _out_msg.size = raw_len;                                                       \
+    ::memcpy(_out_msg.ptr, lz4_out, raw_len);
+
 void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, uint64_t& num,
                              const char* ptr, Vector<MemBlock>& msgs) {
     uint64_t cur_offset = index.prev_total_msg_size;
@@ -289,16 +318,10 @@ void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, ui
     while (num > 0 && size > 0) {
         uint16_t msg_size = extract_message_length(begin);
 
-        // uncompress message
-        size_t raw_len;
-        snappy::GetUncompressedLength(begin, msg_size, &raw_len);
-        MemBlock block;
-        block.ptr = new char[raw_len];
-        block.size = raw_len;
-        bool uncompressed = snappy::RawUncompress(begin, msg_size, (char*)block.ptr);
-        assert(uncompressed);
-
-        msgs.push_back(block);
+        MemBlock msg;
+        UNCOMPRESS_USING_LZ4(begin, msg_size, msg);
+        // UNCOMPRESS_USING_SNAPPY(begin, msg_size, msg);
+        msgs.push_back(msg);
         begin += msg_size;
         ++cur_offset, ++offset, --num, --size;
     }
