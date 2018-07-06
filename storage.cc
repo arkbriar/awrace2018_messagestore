@@ -166,8 +166,8 @@ bool MessageQueue::next_message_slot(uint16_t& slot_offset, uint16_t size) {
 
 void MessageQueue::flush_last_page(bool release) {
     if (!last_page_) return;
-
     std::unique_lock<std::mutex> lock(wq_mutex_);
+    if (!last_page_) return;
 
     // allocate a new page and set paged message index correctly
     uint64_t page_offset = data_file_->next_page_offset();
