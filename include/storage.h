@@ -103,7 +103,7 @@ private:
 #define GIGA_BYTES(n) ((uint64_t(n)) << 30)
 #define TERA_BYTES(n) (uint64_t(n) << 40)
 // must be power of 2
-#define FILE_PAGE_SIZE KILO_BYTES(2)
+#define FILE_PAGE_SIZE KILO_BYTES(4)
 
 // File page header
 struct __attribute__((__packed__)) FilePageHeader {

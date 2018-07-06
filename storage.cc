@@ -289,23 +289,13 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
     // flush and release the last writing page
     if (last_page_) flush_last_page();
 
-    // shrink the index to save more memory
-    if (paged_message_indices_.capacity() > paged_message_indices_.size()) {
-        paged_message_indices_.shrink_to_fit();
-    }
-
     // get current thread's reading buffer
     decltype(reading_pages)::const_accessor ac;
     reading_pages.find(ac, queue_id_);
     auto page_ptr = ac.empty() ? nullptr : ac->second;
     if (page_ptr == nullptr) {
         // try allocate one
-        try {
-            page_ptr = SharedPtr<FilePage>(new FilePage());
-        } catch (std::bad_alloc ex) {
-            // ignore bad alloc
-            LOG("bad alloc");
-        }
+        page_ptr = SharedPtr<FilePage>(new FilePage());
         if (page_ptr) {
             page_ptr->header.offset = NEGATIVE_OFFSET;
             reading_pages.insert(ac, std::make_pair(queue_id_, page_ptr));
