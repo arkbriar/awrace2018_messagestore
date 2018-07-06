@@ -17,7 +17,7 @@ target_link_libraries(queue_race tbb tcmalloc)
 #target_link_libraries(queue_race boost_filesystem boost_system)
 
 # In case you need lz4
-# target_link_libraries(queue_race lz4)
+target_link_libraries(queue_race lz4)
 
 # In case you need lzma
 # target_link_libraries(queue_race lzma)
