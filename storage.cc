@@ -146,11 +146,11 @@ void MessageQueue::load_queue_metadata(const Metadata& metadata, const char* buf
 }
 
 bool MessageQueue::next_message_slot(uint16_t& slot_offset, uint16_t size) {
-    // first page will hold at most (queue_id / DATA_FILE_SPLITS) % 32 + 1 messages, this make write
-    // more average. This leads to 32 timepoints of first flush. I call it flush fast.
+    // first page will hold at most (queue_id / DATA_FILE_SPLITS) % 64 + 1 messages, this make write
+    // more average. This leads to 64 timepoints of first flush. I call it flush fast.
     bool flush_fast =
         paged_message_indices_.size() == 1 &&
-        paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x1f) + 1;
+        paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x3f) + 1;
 
     // if page is full or flush fast, then a new page should be allocated
     if (cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE || flush_fast) {
