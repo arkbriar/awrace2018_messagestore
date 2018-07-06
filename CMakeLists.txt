@@ -23,7 +23,7 @@ target_link_libraries(queue_race tbb tcmalloc)
 # target_link_libraries(queue_race lzma)
 
 # In case you need snappy
-# target_link_libraries(queue_race snappy)
+target_link_libraries(queue_race snappy)
 
 # In case you need lz
 #target_link_libraries(queue_race z)

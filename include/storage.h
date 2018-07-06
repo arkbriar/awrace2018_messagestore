@@ -214,6 +214,7 @@ protected:
     bool next_message_slot(uint16_t& slot_offset, uint16_t size);
     // Methods for write/flushing data
     void write_to_last_page(const MemBlock& msg, uint16_t slot_offset);
+    void write_to_last_page(const char* ptr, size_t size, uint16_t slot_offset);
     // allocate next page, flush last page in last_page_ and set index
     void flush_last_page(bool release);
     void flush_last_page();
@@ -248,7 +249,7 @@ private:
     PagedFile* data_file_;
 };
 
-#define DATA_FILE_SPLITS 100
+#define DATA_FILE_SPLITS 8
 
 class QueueStore {
 public:
