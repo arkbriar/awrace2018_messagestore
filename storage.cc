@@ -149,21 +149,16 @@ void MessageQueue::load_queue_metadata(const Metadata& metadata, const char* buf
 
 uint64_t MessageQueue::next_message_slot(uint64_t& page_offset, uint16_t& slot_offset,
                                          uint16_t size) {
-    // first page will hold at most (queue_id / DATA_FILE_SPLITS) % 64 + 1 messages, this make write
-    // more average
-    if (paged_message_indices_.size() == 1 &&
-        paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 63) + 1) {
-        uint64_t prev_data_page_off = cur_data_page_off_;
-        cur_data_page_off_ += FILE_PAGE_SIZE;
-        page_offset = cur_data_page_off_;
-        slot_offset = 0;
-        cur_data_slot_off_ = size;
-        return prev_data_page_off;
-    }
+    // first page will hold at most (queue_id / DATA_FILE_SPLITS) % 32 + 1 messages, this make write
+    // more average. This leads to 32 timepoints of first flush. I call it flush fast.
+
+    bool flush_fast =
+        paged_message_indices_.size() == 1 &&
+        paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x1f) + 1;
 
     // deal with the following pages
     if (cur_data_page_off_ == NEGATIVE_OFFSET ||
-        cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE) {
+        cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE || flush_fast) {
         uint64_t prev_data_page_off = cur_data_page_off_;
         // if this page is the last page in extent, then allocate next
         // extent
