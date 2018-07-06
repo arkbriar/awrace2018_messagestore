@@ -131,7 +131,6 @@ class MappedFilePagePtr {
 public:
     MappedFilePagePtr(void* addr) : file_page_((FilePage*)addr) {}
     MappedFilePagePtr(int fd, size_t offset, bool readonly) {
-        assert(offset == FILE_PAGE_OFFSET_OF(offset));
         file_page_ = (FilePage*)map_file_page(fd, offset, readonly);
     }
     ~MappedFilePagePtr() { unmap_file_page(file_page_); }
