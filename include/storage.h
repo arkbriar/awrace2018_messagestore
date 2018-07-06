@@ -183,7 +183,7 @@ private:
 
 class QueueStore;
 struct __attribute__((__packed__)) MessagePageIndex {
-    uint64_t page_offset;
+    uint64_t volatile page_offset;
     uint64_t prev_total_msg_size;
     uint16_t msg_size = 0;
     MessagePageIndex() {}
