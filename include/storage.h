@@ -260,7 +260,7 @@ public:
     Vector<MemBlock> get(const String& queue_name, long offset, long size);
 
 protected:
-    ConcurrentHashMap<String, SharedPtr<MessageQueue>> queues_;
+    ConcurrentHashMap<String, SharedPtr<MessageQueue>> queues_{1000010};
 
     SharedPtr<MessageQueue> find_or_create_queue(const String& queue_name);
     SharedPtr<MessageQueue> find_queue(const String& queue_name) const;
