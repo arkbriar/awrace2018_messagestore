@@ -153,11 +153,15 @@ using FilePageWriter = std::function<void(char*)>;
 #define PAGES_IN_WRITE_BUFFER (PAGED_FILE_WRITE_BUFFER_SIZE / FILE_PAGE_SIZE)
 class PagedFile {
     struct WriteBuffer {
-        char buf[PAGED_FILE_WRITE_BUFFER_SIZE];
+        char* buf;
         uint64_t current_pages = 0;
         uint64_t start_offset = NEGATIVE_OFFSET;
         PagedFile* file;
-        ~WriteBuffer() { file->flush(); }
+        WriteBuffer() { buf = new char[PAGED_FILE_WRITE_BUFFER_SIZE]; }
+        ~WriteBuffer() {
+            file->flush();
+            delete buf;
+        }
     };
     static thread_local SharedPtr<WriteBuffer> tls_write_buffer_;
 
@@ -177,6 +181,7 @@ public:
     void mapped_read(uint64_t offset, const FilePageReader& reader);
     void mapped_write(uint64_t offset, const FilePageWriter& writer);
     void flush();
+    void async_flush();
     uint64_t allocate_block(size_t size) { return page_offset.next_raw(size); }
 #ifdef __linux__
     // use this carefully, because read throughput is not large and memory is

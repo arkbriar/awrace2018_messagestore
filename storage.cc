@@ -83,6 +83,21 @@ void PagedFile::flush() {
     tls_write_buffer_->start_offset = NEGATIVE_OFFSET;
 }
 
+void PagedFile::async_flush() {
+    char* buf = tls_write_buffer_->buf;
+    uint64_t size = tls_write_buffer_->current_pages * FILE_PAGE_SIZE;
+    uint64_t offset = tls_write_buffer_->start_offset;
+    tls_write_buffer_->buf = new char[PAGED_FILE_WRITE_BUFFER_SIZE];
+    tls_write_buffer_->current_pages = 0;
+    tls_write_buffer_->start_offset = NEGATIVE_OFFSET;
+    std::thread write_t([this, buf, size, offset]() {
+        int ret = ::pwrite(fd_, buf, size, offset);
+        if (ret == -1) perror("write buffer failed");
+        ::free(buf);
+    });
+    write_t.detach();
+}
+
 uint64_t PagedFile::write(const FilePage* page) {
     if (!page) return NEGATIVE_OFFSET;
 
@@ -104,7 +119,7 @@ uint64_t PagedFile::write(const FilePage* page) {
 
     if (tls_write_buffer_->current_pages >= PAGES_IN_WRITE_BUFFER) {
         // time to flush
-        flush();
+        async_flush();
         // reset buffer
         tls_write_buffer_->start_offset = allocate_block(PAGED_FILE_WRITE_BUFFER_SIZE);
         tls_write_buffer_->current_pages = 0;
@@ -192,8 +207,8 @@ bool MessageQueue::next_message_slot(uint16_t& slot_offset, uint16_t size) {
     // first page will hold at most (queue_id / DATA_FILE_SPLITS) % 64 + 1 messages, this make write
     // more average. This leads to 64 timepoints of first flush. I call it flush fast.
     bool flush_fast = false;
-        /* paged_message_indices_.size() == 1 &&
-         * paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x3f) + 1; */
+    /* paged_message_indices_.size() == 1 &&
+     * paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x3f) + 1; */
 
     // if page is full or flush fast, then a new page should be allocated
     if (cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE || flush_fast) {
