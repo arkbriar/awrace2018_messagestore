@@ -100,7 +100,7 @@ private:
  ------------------------------------------------*/
 #define KILO_BYTES(n) (uint64_t(n) << 10)
 #define MEGA_BYTES(n) (uint64_t(n) << 20)
-#define GIGA_BYTES(n) ((uint64_t(n)) << 30)
+#define GIGA_BYTES(n) (uint64_t(n) << 30)
 #define TERA_BYTES(n) (uint64_t(n) << 40)
 // must be power of 2
 #define FILE_PAGE_SIZE KILO_BYTES(4)

@@ -151,9 +151,9 @@ void MessageQueue::load_queue_metadata(const Metadata& metadata, const char* buf
 bool MessageQueue::next_message_slot(uint16_t& slot_offset, uint16_t size) {
     // first page will hold at most (queue_id / DATA_FILE_SPLITS) % 64 + 1 messages, this make write
     // more average. This leads to 64 timepoints of first flush. I call it flush fast.
-    bool flush_fast = false;
-    /* paged_message_indices_.size() == 1 &&
-     * paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x3f) + 1; */
+    bool flush_fast =
+        paged_message_indices_.size() == 1 &&
+        paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x3f) + 1;
 
     // if page is full or flush fast, then a new page should be allocated
     if (cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE || flush_fast) {
@@ -219,6 +219,10 @@ void MessageQueue::write_to_last_page(const char* ptr, size_t size, uint16_t slo
     size_t compressed_size =                              \
         LZ4_compress_default((const char*)msg.ptr, msg_ptr, msg.size, sizeof(msg_ptr));
 
+#define COMPRESS_NONE(msg, msg_ptr, compressed_size) \
+    char* msg_ptr = (char*)msg.ptr;                  \
+    size_t compressed_size = msg.size;
+
 // put is sequential to support index verification
 void MessageQueue::put(const MemBlock& message) {
     // maximum support message size of
@@ -230,11 +234,10 @@ void MessageQueue::put(const MemBlock& message) {
     }
 
     // COMPRESS_USING_SNAPPY(message, msg_ptr, compressed_size);
-    COMPRESS_USING_LZ4(message, msg_ptr, compressed_size);
+    // COMPRESS_USING_LZ4(message, msg_ptr, compressed_size);
+    COMPRESS_NONE(message, msg_ptr, compressed_size);
     assert(compressed_size > 0 && compressed_size <= 4000);
     DLOG("compressed from %ld to %ld", message.size, compressed_size);
-    // free raw message
-    ::free(message.ptr);
 
     uint16_t msg_size = compressed_size + 1;
     // use 2 bytes to record message length >= 128,
@@ -254,6 +257,9 @@ void MessageQueue::put(const MemBlock& message) {
 
     // write message into last page
     write_to_last_page(msg_ptr, compressed_size, slot_offset);
+
+    // free raw message
+    ::free(message.ptr);
 
     ++paged_message_indices_.back().msg_size;
 }
@@ -299,6 +305,8 @@ uint16_t MessageQueue::extract_message_length(const char*& ptr) {
     _out_msg.size = raw_len;                                                       \
     ::memcpy(_out_msg.ptr, lz4_out, raw_len);
 
+#define UNCOMPRESS_NONE(_begin, _size, _out_msg) _out_msg = new_memblock(_begin, _size);
+
 void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, uint64_t& num,
                              const char* ptr, Vector<MemBlock>& msgs) {
     uint64_t cur_offset = index.prev_total_msg_size;
@@ -319,8 +327,9 @@ void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, ui
         uint16_t msg_size = extract_message_length(begin);
 
         MemBlock msg;
-        UNCOMPRESS_USING_LZ4(begin, msg_size, msg);
+        // UNCOMPRESS_USING_LZ4(begin, msg_size, msg);
         // UNCOMPRESS_USING_SNAPPY(begin, msg_size, msg);
+        UNCOMPRESS_NONE(begin, msg_size, msg);
         msgs.push_back(msg);
         begin += msg_size;
         ++cur_offset, ++offset, --num, --size;
