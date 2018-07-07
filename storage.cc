@@ -1,10 +1,10 @@
 #include "storage.h"
 
-#include <snappy.h>
 #include <lz4.h>
+#include <snappy.h>
 #include <tbb/parallel_for.h>
-#include <thread>
 #include <map>
+#include <thread>
 
 namespace race2018 {
 
@@ -26,6 +26,8 @@ void unmap_file_page(void* addr) {
     if (addr == nullptr) return;
     ::munmap(addr, FILE_PAGE_SIZE);
 }
+
+thread_local SharedPtr<PagedFile::WriteBuffer> PagedFile::tls_write_buffer_;
 
 PagedFile::PagedFile(const String& file) : file_(file) {
     fd_ = ::open(file.c_str(), O_RDWR | O_CREAT, 0644);
@@ -71,6 +73,45 @@ void PagedFile::write(uint64_t offset, const FilePage* page) {
     if (ret == -1) perror("write page failed");
 }
 
+void PagedFile::flush() {
+    // time to flush
+    int ret =
+        ::pwrite(fd_, tls_write_buffer_->buf, tls_write_buffer_->current_pages * FILE_PAGE_SIZE,
+                 tls_write_buffer_->start_offset);
+    if (ret == -1) perror("write buffer failed");
+    tls_write_buffer_->current_pages = 0;
+    tls_write_buffer_->start_offset = NEGATIVE_OFFSET;
+}
+
+uint64_t PagedFile::write(const FilePage* page) {
+    if (!page) return NEGATIVE_OFFSET;
+
+    // lazy allocate buffer
+    if (!tls_write_buffer_) {
+        tls_write_buffer_ = std::make_shared<WriteBuffer>();
+        tls_write_buffer_->start_offset = allocate_block(PAGED_FILE_WRITE_BUFFER_SIZE);
+        tls_write_buffer_->file = this;
+    } else if (tls_write_buffer_->start_offset == NEGATIVE_OFFSET) {
+        tls_write_buffer_->start_offset = allocate_block(PAGED_FILE_WRITE_BUFFER_SIZE);
+    }
+
+    uint64_t offset_buf = tls_write_buffer_->current_pages * FILE_PAGE_SIZE;
+    // set page offset to page
+    const_cast<FilePage*>(page)->header.offset = tls_write_buffer_->start_offset + offset_buf;
+    ++tls_write_buffer_->current_pages;
+    // copy to buffer
+    ::memcpy(tls_write_buffer_->buf + offset_buf, (void*)page, FILE_PAGE_SIZE);
+
+    if (tls_write_buffer_->current_pages >= PAGES_IN_WRITE_BUFFER) {
+        // time to flush
+        flush();
+        // reset buffer
+        tls_write_buffer_->start_offset = allocate_block(PAGED_FILE_WRITE_BUFFER_SIZE);
+        tls_write_buffer_->current_pages = 0;
+    }
+    return page->header.offset;
+}
+
 void PagedFile::mapped_read(uint64_t offset, const FilePageReader& reader) {
     MappedFilePagePtr page_ptr(fd_, offset, true);
     if (!page_ptr) {
@@ -92,12 +133,10 @@ void PagedFile::mapped_write(uint64_t offset, const FilePageWriter& writer) {
     }
 }
 
-uint64_t PagedFile::next_page_offset() { return page_offset.next(); }
-
 MessageQueue::MessageQueue() {}
 
-MessageQueue::MessageQueue(uint32_t queue_id, const String& queue_name, PagedFile* data_file)
-    : queue_id_(queue_id), queue_name_(queue_name), data_file_(data_file) {}
+MessageQueue::MessageQueue(uint32_t queue_id, PagedFile* data_file)
+    : queue_id_(queue_id), data_file_(data_file) {}
 
 struct __attribute__((__packed__)) MessageQueue::Metadata {
     uint32_t queue_id;
@@ -109,21 +148,21 @@ struct __attribute__((__packed__)) MessageQueue::Metadata {
     uint64_t extra_length() const { return name_size + indices_size * sizeof(MessagePageIndex); }
 };
 
-void MessageQueue::construct_metadata(Metadata& metadata) const {
+void MessageQueue::construct_metadata(const String& queue_name, Metadata& metadata) const {
     metadata.queue_id = queue_id_;
-    metadata.name_size = queue_name_.size();
+    metadata.name_size = queue_name.size();
     metadata.slot_offset = cur_data_slot_off_;
     metadata.indices_size = paged_message_indices_.size();
 }
 
-void MessageQueue::flush_queue_metadata(int fd) const {
+void MessageQueue::flush_queue_metadata(const String& queue_name, int fd) const {
     Metadata metadata;
-    construct_metadata(metadata);
+    construct_metadata(queue_name, metadata);
     size_t buf_len = metadata.index_size();
 
     char* buf[buf_len];
     buffer::write_to_buf(buf, metadata);
-    memcpy(buf + sizeof(Metadata), queue_name_.c_str(), metadata.name_size);
+    memcpy(buf + sizeof(Metadata), queue_name.c_str(), metadata.name_size);
     auto ptr = buf + sizeof(Metadata) + metadata.name_size;
     for (auto& index : paged_message_indices_) {
         buffer::write_to_buf(ptr, index);
@@ -132,10 +171,10 @@ void MessageQueue::flush_queue_metadata(int fd) const {
     ::write(fd, buf, buf_len);
 }
 
-void MessageQueue::load_queue_metadata(const Metadata& metadata, const char* buf) {
+String MessageQueue::load_queue_metadata(const Metadata& metadata, const char* buf) {
     queue_id_ = metadata.queue_id;
     cur_data_slot_off_ = metadata.slot_offset;
-    queue_name_ = String(buf, metadata.name_size);
+    String queue_name = String(buf, metadata.name_size);
     paged_message_indices_.reserve(metadata.indices_size);
 
     MessagePageIndex msg_index;
@@ -146,14 +185,15 @@ void MessageQueue::load_queue_metadata(const Metadata& metadata, const char* buf
         paged_message_indices_.push_back(msg_index);
         ptr += sizeof(MessagePageIndex);
     }
+    return queue_name;
 }
 
 bool MessageQueue::next_message_slot(uint16_t& slot_offset, uint16_t size) {
     // first page will hold at most (queue_id / DATA_FILE_SPLITS) % 64 + 1 messages, this make write
     // more average. This leads to 64 timepoints of first flush. I call it flush fast.
-    bool flush_fast = false;
-    /* paged_message_indices_.size() == 1 &&
-     * paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x3f) + 1; */
+    bool flush_fast =
+        paged_message_indices_.size() == 1 &&
+        paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x3f) + 1;
 
     // if page is full or flush fast, then a new page should be allocated
     if (cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE || flush_fast) {
@@ -172,22 +212,24 @@ void MessageQueue::flush_last_page(bool release) {
     std::unique_lock<std::mutex> lock(wq_mutex_);
     if (!last_page_) return;
 
-    // allocate a new page and set paged message index correctly
-    uint64_t page_offset = data_file_->next_page_offset();
-    paged_message_indices_.back().page_offset = page_offset;
-
-    // write all messages in this queue to page of page_offset
-    data_file_->write(page_offset, last_page_);
+    paged_message_indices_.back().page_offset = data_file_->write(last_page_);
     if (release) {
         delete last_page_;
         last_page_ = nullptr;
     }
 }
 
-void MessageQueue::flush_last_page() {
-    if (!paged_message_indices_.empty()) {
-        flush_last_page(true);
-    }
+void MessageQueue::force_flush_last_page() {
+    if (!last_page_) return;
+    std::unique_lock<std::mutex> lock(wq_mutex_);
+    if (!last_page_) return;
+
+    uint64_t offset = data_file_->allocate_block(FILE_PAGE_SIZE);
+    paged_message_indices_.back().page_offset = offset;
+    data_file_->write(offset, last_page_);
+
+    delete last_page_;
+    last_page_ = nullptr;
 }
 
 void MessageQueue::write_to_last_page(const MemBlock& msg, uint16_t slot_offset) {
@@ -219,6 +261,10 @@ void MessageQueue::write_to_last_page(const char* ptr, size_t size, uint16_t slo
     size_t compressed_size =                              \
         LZ4_compress_default((const char*)msg.ptr, msg_ptr, msg.size, sizeof(msg_ptr));
 
+#define COMPRESS_NONE(msg, msg_ptr, compressed_size) \
+    char* msg_ptr = (char*)msg.ptr;                  \
+    size_t compressed_size = msg.size;
+
 // put is sequential to support index verification
 void MessageQueue::put(const MemBlock& message) {
     // maximum support message size of
@@ -230,11 +276,10 @@ void MessageQueue::put(const MemBlock& message) {
     }
 
     // COMPRESS_USING_SNAPPY(message, msg_ptr, compressed_size);
-    COMPRESS_USING_LZ4(message, msg_ptr, compressed_size);
+    // COMPRESS_USING_LZ4(message, msg_ptr, compressed_size);
+    COMPRESS_NONE(message, msg_ptr, compressed_size);
     assert(compressed_size > 0 && compressed_size <= 4000);
     DLOG("compressed from %ld to %ld", message.size, compressed_size);
-    // free raw message
-    ::free(message.ptr);
 
     uint16_t msg_size = compressed_size + 1;
     // use 2 bytes to record message length >= 128,
@@ -254,6 +299,9 @@ void MessageQueue::put(const MemBlock& message) {
 
     // write message into last page
     write_to_last_page(msg_ptr, compressed_size, slot_offset);
+
+    // free raw message
+    ::free(message.ptr);
 
     ++paged_message_indices_.back().msg_size;
 }
@@ -299,6 +347,8 @@ uint16_t MessageQueue::extract_message_length(const char*& ptr) {
     _out_msg.size = raw_len;                                                       \
     ::memcpy(_out_msg.ptr, lz4_out, raw_len);
 
+#define UNCOMPRESS_NONE(_begin, _size, _out_msg) _out_msg = new_memblock(_begin, _size);
+
 void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, uint64_t& num,
                              const char* ptr, Vector<MemBlock>& msgs) {
     uint64_t cur_offset = index.prev_total_msg_size;
@@ -319,8 +369,9 @@ void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, ui
         uint16_t msg_size = extract_message_length(begin);
 
         MemBlock msg;
-        UNCOMPRESS_USING_LZ4(begin, msg_size, msg);
+        // UNCOMPRESS_USING_LZ4(begin, msg_size, msg);
         // UNCOMPRESS_USING_SNAPPY(begin, msg_size, msg);
+        UNCOMPRESS_NONE(begin, msg_size, msg);
         msgs.push_back(msg);
         begin += msg_size;
         ++cur_offset, ++offset, --num, --size;
@@ -331,7 +382,7 @@ static thread_local std::map<uint32_t, SharedPtr<FilePage>> reading_pages;
 
 Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
     // flush and release the last writing page
-    if (last_page_) flush_last_page();
+    if (last_page_) force_flush_last_page();
 
     // get current thread's reading buffer
     auto it = reading_pages.find(queue_id_);
@@ -426,11 +477,11 @@ void QueueStore::load_queues_metadatas() {
 
         // set up queue
         SharedPtr<MessageQueue> q = std::make_shared<MessageQueue>();
-        q->load_queue_metadata(metadata, extra_buf);
+        auto queue_name = q->load_queue_metadata(metadata, extra_buf);
         q->set_data_file(data_files_[q->get_queue_id() % DATA_FILE_SPLITS]);
 
         // add this queue
-        queues_.insert(std::make_pair(q->get_queue_name(), q));
+        queues_.insert(std::make_pair(queue_name, q));
     }
 }
 
@@ -439,8 +490,8 @@ void QueueStore::flush_queues_metadatas() {
     assert(fd > 0);
     for (auto& entry : queues_) {
         auto& q = entry.second;
-        q->flush_last_page();
-        q->flush_queue_metadata(fd);
+        q->force_flush_last_page();
+        q->flush_queue_metadata(entry.first, fd);
     }
 }
 
@@ -448,8 +499,8 @@ SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_nam
     ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_accessor ac;
     if (!queues_.find(ac, queue_name)) {
         uint32_t queue_id = next_queue_id_.next();
-        SharedPtr<MessageQueue> queue_ptr = std::make_shared<MessageQueue>(
-            queue_id, queue_name, data_files_[queue_id % DATA_FILE_SPLITS]);
+        SharedPtr<MessageQueue> queue_ptr =
+            std::make_shared<MessageQueue>(queue_id, data_files_[queue_id % DATA_FILE_SPLITS]);
         queues_.insert(ac, std::make_pair(queue_name, queue_ptr));
         DLOG("Created a new queue, id: %d, name: %s", q->get_queue_id(),
              q->get_queue_name().c_str());
@@ -463,36 +514,13 @@ SharedPtr<MessageQueue> QueueStore::find_queue(const String& queue_name) const {
     return found ? ac->second : nullptr;
 }
 
-void QueueStore::sweep_caches() {
-    bool expected = false;
-    if (cache_cleared.compare_exchange_strong(expected, true)) {
-        std::thread sweeper([this]() {
-            size_t grainsize = queues_.size() / std::thread::hardware_concurrency();
-            using RangeType = ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_range_type;
-            tbb::parallel_for(queues_.range(grainsize), [](const RangeType& r) {
-                for (auto it = r.begin(); it != r.end(); ++it) {
-                    auto mq_ptr = it->second;
-                    mq_ptr->flush_last_page();
-                }
-            });
-        });
-        sweeper.detach();
-    }
-}
-
 void QueueStore::put(const String& queue_name, const MemBlock& message) {
     if (!message.ptr) return;
-    // mark cache's not cleared
-    cache_cleared.store(false);
-
     auto q_ptr = find_or_create_queue(queue_name);
     q_ptr->put(message);
 }
 
 Vector<MemBlock> QueueStore::get(const String& queue_name, long offset, long size) {
-    // sweep all queues' writing cache
-    if (!cache_cleared.load()) sweep_caches();
-
     auto q_ptr = find_queue(queue_name);
     if (q_ptr) return q_ptr->get(offset, size);
     // return empty list when queue is not found
