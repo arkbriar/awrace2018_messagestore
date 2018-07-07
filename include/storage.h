@@ -88,6 +88,8 @@ public:
     SteppedValue(T step) : SteppedValue(T{}, step) {}
     SteppedValue(T value, T step) : value_(value), step_(step) {}
     T next() { return value_.fetch_add(step_); }
+    T next(size_t n) { return value_.fetch_add(n * step_); }
+    T next_raw(size_t raw_n) { return value_.fetch_add(raw_n); }
 
 private:
     const T step_;
@@ -147,20 +149,35 @@ private:
 
 using FilePageReader = std::function<void(const char*)>;
 using FilePageWriter = std::function<void(char*)>;
+#define PAGED_FILE_WRITE_BUFFER_SIZE MEGA_BYTES(32)
+#define PAGES_IN_WRITE_BUFFER (PAGED_FILE_WRITE_BUFFER_SIZE / FILE_PAGE_SIZE)
 class PagedFile {
+    struct WriteBuffer {
+        char buf[PAGED_FILE_WRITE_BUFFER_SIZE];
+        uint64_t current_pages = 0;
+        uint64_t start_offset = NEGATIVE_OFFSET;
+        PagedFile* file;
+        ~WriteBuffer() { file->flush(); }
+    };
+    static thread_local SharedPtr<WriteBuffer> tls_write_buffer_;
+
 public:
     PagedFile(const String& file);
     ~PagedFile();
 
+    int fd() const { return fd_; }
     const String& get_file() const { return this->file_; }
     size_t size() const { return this->size_; }
     void read(uint64_t offset, const FilePageReader& reader);
     void read(uint64_t offset, FilePage* page);
     void write(uint64_t offset, const FilePageWriter& writer);
     void write(uint64_t offset, const FilePage* page);
+    // this is thread local buffered write
+    uint64_t write(const FilePage* page);
     void mapped_read(uint64_t offset, const FilePageReader& reader);
     void mapped_write(uint64_t offset, const FilePageWriter& writer);
-    uint64_t next_page_offset();
+    void flush();
+    uint64_t allocate_block(size_t size) { return page_offset.next_raw(size); }
 #ifdef __linux__
     // use this carefully, because read throughput is not large and memory is
     // not large enough
@@ -197,10 +214,9 @@ class MessageQueue {
 
 public:
     explicit MessageQueue();
-    explicit MessageQueue(uint32_t queue_id, const String& queue_name, PagedFile* data_file);
+    explicit MessageQueue(uint32_t queue_id, PagedFile* data_file);
 
     uint32_t get_queue_id() const { return this->queue_id_; }
-    const String& get_queue_name() const { return this->queue_name_; }
 
     void put(const MemBlock& message);
     Vector<MemBlock> get(uint64_t offset, uint64_t number);
@@ -217,24 +233,22 @@ protected:
     void write_to_last_page(const char* ptr, size_t size, uint16_t slot_offset);
     // allocate next page, flush last page in last_page_ and set index
     void flush_last_page(bool release);
-    void flush_last_page();
+    void force_flush_last_page();
     // Methods for QueueStore to initialize id and name when it
     // create a new queue.
     void set_queue_id(uint32_t queue_id) { this->queue_id_ = queue_id; }
-    void set_queue_name(const String& queue_name) { this->queue_name_ = queue_name; }
     void set_data_file(PagedFile* data_file) { this->data_file_ = data_file; }
     // Methods for extracting message length
     uint16_t extract_message_length(const char*& ptr);
 
     // Struct and methods for save/load metadata of this queue
     struct Metadata;
-    void construct_metadata(Metadata& metadata) const;
-    void flush_queue_metadata(int fd) const;
-    void load_queue_metadata(const Metadata& metadata, const char* buf);
+    void construct_metadata(const String& queue_name, Metadata& metadata) const;
+    void flush_queue_metadata(const String& queue_name, int fd) const;
+    String load_queue_metadata(const Metadata& metadata, const char* buf);
 
 private:
     uint32_t queue_id_ = -1;
-    String queue_name_;
 
     // Cursors for writing data
     uint16_t cur_data_slot_off_ = 0;
@@ -249,7 +263,8 @@ private:
     PagedFile* data_file_;
 };
 
-#define DATA_FILE_SPLITS 4
+// forced 1
+#define DATA_FILE_SPLITS 1
 
 class QueueStore {
 public:
@@ -273,11 +288,6 @@ protected:
     void load_queues_metadatas();
     // flush all queues' metadatas to disk file index.data
     void flush_queues_metadatas();
-
-    // sweep all writing last pages of all queues, to release more memory
-    // for reading
-    Atomic<bool> cache_cleared{false};
-    void sweep_caches();
 
 private:
     String location_;
