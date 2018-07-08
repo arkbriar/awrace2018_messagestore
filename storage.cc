@@ -227,7 +227,7 @@ void MessageQueue::flush_last_page(bool release) {
     std::unique_lock<std::mutex> lock(wq_mutex_);
     if (!last_page_) return;
 
-    paged_message_indices_.back().page_offset = data_file_->write(last_page_);
+    paged_message_indices_.back().page_idx = data_file_->write(last_page_) / FILE_PAGE_SIZE;
     if (release) {
         delete last_page_;
         last_page_ = nullptr;
@@ -240,7 +240,7 @@ void MessageQueue::force_flush_last_page() {
     if (!last_page_) return;
 
     uint64_t offset = data_file_->allocate_block(FILE_PAGE_SIZE);
-    paged_message_indices_.back().page_offset = offset;
+    paged_message_indices_.back().page_idx = offset / FILE_PAGE_SIZE;
     data_file_->write(offset, last_page_);
 
     delete last_page_;
@@ -321,7 +321,7 @@ void MessageQueue::put(const MemBlock& message) {
     ++paged_message_indices_.back().msg_size;
 }
 
-size_t MessageQueue::binary_search_indices(uint64_t msg_offset) const {
+size_t MessageQueue::binary_search_indices(uint32_t msg_offset) const {
     size_t first = 0, last = paged_message_indices_.size();
     while (first < last) {
         size_t middle = first + (last - first) / 2;
@@ -364,7 +364,7 @@ uint16_t MessageQueue::extract_message_length(const char*& ptr) {
 
 #define UNCOMPRESS_NONE(_begin, _size, _out_msg) _out_msg = new_memblock(_begin, _size);
 
-void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, uint64_t& num,
+void MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset, uint32_t& num,
                              const char* ptr, Vector<MemBlock>& msgs) {
     uint64_t cur_offset = index.prev_total_msg_size;
     uint16_t size = index.msg_size;
@@ -395,7 +395,7 @@ void MessageQueue::read_msgs(const MessagePageIndex& index, uint64_t& offset, ui
 
 static thread_local std::map<uint32_t, SharedPtr<FilePage>> reading_pages;
 
-Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
+Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     // flush and release the last writing page
     if (last_page_) force_flush_last_page();
 
@@ -428,7 +428,7 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
         --last_page_idx;
     }
 
-    uint64_t available_size =
+    uint32_t available_size =
         std::min(offset + number, paged_message_indices_[last_page_idx].total_msg_size()) -
         std::max(offset, paged_message_indices_[first_page_idx].prev_total_msg_size);
     number = std::min(number, available_size);
@@ -439,14 +439,14 @@ Vector<MemBlock> MessageQueue::get(uint64_t offset, uint64_t number) {
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
         if (page_ptr) {
-            if (page_ptr->header.offset != index.page_offset) {
-                data_file_->read(index.page_offset, page_ptr.get());
+            if (page_ptr->header.offset != index.page_idx * FILE_PAGE_SIZE) {
+                data_file_->read(index.page_idx * FILE_PAGE_SIZE, page_ptr.get());
             }
             assert(page_ptr->header.offset == index.page_offset);
             read_msgs(index, offset, number, page_ptr->content, msgs);
         } else {
             // read all messages to msgs
-            data_file_->read(index.page_offset,
+            data_file_->read(index.page_idx * FILE_PAGE_SIZE,
                              [this, &index, &offset, &number, &msgs](const char* ptr) {
                                  this->read_msgs(index, offset, number, ptr, msgs);
                              });

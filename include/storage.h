@@ -205,13 +205,13 @@ private:
 
 class QueueStore;
 struct __attribute__((__packed__)) MessagePageIndex {
-    uint64_t volatile page_offset;
-    uint64_t prev_total_msg_size;
+    uint32_t volatile page_idx;
+    uint32_t prev_total_msg_size;
     uint16_t msg_size = 0;
     MessagePageIndex() {}
-    MessagePageIndex(uint64_t page_offset, uint64_t prev_total_msg_size)
-        : page_offset(page_offset), prev_total_msg_size(prev_total_msg_size) {}
-    uint64_t total_msg_size() const { return prev_total_msg_size + msg_size; }
+    MessagePageIndex(uint32_t page_idx, uint32_t prev_total_msg_size)
+        : page_idx(page_idx), prev_total_msg_size(prev_total_msg_size) {}
+    uint32_t total_msg_size() const { return prev_total_msg_size + msg_size; }
 };
 
 class MessageQueue {
@@ -224,12 +224,12 @@ public:
     uint32_t get_queue_id() const { return this->queue_id_; }
 
     void put(const MemBlock& message);
-    Vector<MemBlock> get(uint64_t offset, uint64_t number);
+    Vector<MemBlock> get(uint32_t offset, uint32_t number);
 
 protected:
-    void read_msgs(const MessagePageIndex& index, uint64_t& offset, uint64_t& num, const char* ptr,
+    void read_msgs(const MessagePageIndex& index, uint32_t& offset, uint32_t& num, const char* ptr,
                    Vector<MemBlock>& msgs);
-    size_t binary_search_indices(uint64_t msg_offset) const;
+    size_t binary_search_indices(uint32_t msg_offset) const;
     // Methods for message slots in data page, true indicates page is full
     // and a new page's needed
     bool next_message_slot(uint16_t& slot_offset, uint16_t size);
