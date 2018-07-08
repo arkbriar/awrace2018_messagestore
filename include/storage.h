@@ -105,7 +105,7 @@ private:
 #define GIGA_BYTES(n) (uint64_t(n) << 30)
 #define TERA_BYTES(n) (uint64_t(n) << 40)
 // must be power of 2
-#define FILE_PAGE_SIZE KILO_BYTES(2)
+#define FILE_PAGE_SIZE KILO_BYTES(4)
 
 // File page header
 struct __attribute__((__packed__)) FilePageHeader {
@@ -149,39 +149,7 @@ private:
 
 using FilePageReader = std::function<void(const char*)>;
 using FilePageWriter = std::function<void(char*)>;
-#define PAGED_FILE_WRITE_BUFFER_SIZE MEGA_BYTES(32)
-#define PAGES_IN_WRITE_BUFFER (PAGED_FILE_WRITE_BUFFER_SIZE / FILE_PAGE_SIZE)
 class PagedFile {
-    struct WriteBuffer {
-        char buf[PAGED_FILE_WRITE_BUFFER_SIZE];
-        uint64_t current_pages = 0;
-        uint64_t start_offset = NEGATIVE_OFFSET;
-        PagedFile* volatile file = nullptr;
-        ~WriteBuffer() {
-            if (file) file->flush(this);
-        }
-    };
-    static thread_local bool write_buffer_initialized_;
-    static thread_local SharedPtr<WriteBuffer> tls_write_buffer_;
-    ConcurrentBoundedQueue<SharedPtr<WriteBuffer>> write_buffer_queue_;
-    Atomic<uint64_t> next_wbq_{0};
-    ConcurrentBoundedQueue<SharedPtr<WriteBuffer>> wbq_[2];
-
-public:
-    void clear_and_disable_write_buffer() {
-        write_buffer_queue_.set_capacity(0);
-        write_buffer_queue_.clear();
-    }
-
-    void write_out_all_buffers() {
-        for (int i = 0; i < 2; ++i) {
-            SharedPtr<WriteBuffer> wb;
-            while (wbq_[i].try_pop(wb)) {
-                flush(wb.get());
-            }
-        }
-    }
-
 public:
     PagedFile(const String& file);
     ~PagedFile();
@@ -193,20 +161,15 @@ public:
     void read(uint64_t offset, FilePage* page);
     void write(uint64_t offset, const FilePageWriter& writer);
     void write(uint64_t offset, const FilePage* page);
-    // this is thread local buffered write
-    uint64_t async_write(const FilePage* page);
+    uint64_t write(const FilePage* page);
+    uint64_t force_write(const FilePage* page);
     void mapped_read(uint64_t offset, const FilePageReader& reader);
     void mapped_write(uint64_t offset, const FilePageWriter& writer);
-    void flush(WriteBuffer* write_buf);
-    void async_flush();
     uint64_t allocate_block(size_t size) { return page_offset.next_raw(size); }
-#ifdef __linux__
-    // use this carefully, because read throughput is not large and memory is
-    // not large enough
-    void readahead(uint64_t offset) { ::readahead(fd_, offset, FILE_PAGE_SIZE); }
-#endif
 
 protected:
+    char write_buf[MEGA_BYTES(32)];
+    uint32_t cur_pages = 0;
     SteppedValue<uint64_t> page_offset{FILE_PAGE_SIZE};
 
 private:
@@ -225,6 +188,7 @@ struct __attribute__((__packed__)) MessagePageIndex {
     uint32_t volatile page_idx;
     uint32_t prev_total_msg_size;
     uint16_t msg_size = 0;
+    uint8_t volatile file_idx;
     MessagePageIndex() {}
     MessagePageIndex(uint32_t page_idx, uint32_t prev_total_msg_size)
         : page_idx(page_idx), prev_total_msg_size(prev_total_msg_size) {}
@@ -236,7 +200,7 @@ class MessageQueue {
 
 public:
     explicit MessageQueue();
-    explicit MessageQueue(uint32_t queue_id, PagedFile* data_file);
+    explicit MessageQueue(uint32_t queue_id, QueueStore* store);
 
     uint32_t get_queue_id() const { return this->queue_id_; }
 
@@ -259,7 +223,6 @@ protected:
     // Methods for QueueStore to initialize id and name when it
     // create a new queue.
     void set_queue_id(uint32_t queue_id) { this->queue_id_ = queue_id; }
-    void set_data_file(PagedFile* data_file) { this->data_file_ = data_file; }
     // Methods for extracting message length
     uint16_t extract_message_length(const char*& ptr);
 
@@ -281,12 +244,12 @@ private:
 
     // Paged message index
     Vector<MessagePageIndex> paged_message_indices_;
-    // Date file
-    PagedFile* data_file_;
+
+    // QueueStore
+    QueueStore* store_;
 };
 
-// forced 1
-#define DATA_FILE_SPLITS 1
+#define DATA_FILE_SPLITS 10
 
 class QueueStore {
 public:
@@ -296,25 +259,29 @@ public:
     void put(const String& queue_name, const MemBlock& message);
     Vector<MemBlock> get(const String& queue_name, long offset, long size);
 
+    String data_file_path(int idx) const {
+        return location_ + "/messages_" + std::to_string(idx) + ".data";
+    }
+    String index_file_path() const { return location_ + "/index.data"; }
+
+    PagedFile* get_data_file(int idx);
+
+    Atomic<int> data_file_index{0};
+
 protected:
     ConcurrentHashMap<String, SharedPtr<MessageQueue>> queues_{1000010};
 
     SharedPtr<MessageQueue> find_or_create_queue(const String& queue_name);
     SharedPtr<MessageQueue> find_queue(const String& queue_name) const;
 
-    String data_file_path(int idx) const {
-        return location_ + "/messages_" + std::to_string(idx) + ".data";
-    }
-    String index_file_path() const { return location_ + "/index.data"; }
     // load all queues' metadatas from disk file index.data
-    void load_queues_metadatas();
+    // void load_queues_metadatas();
     // flush all queues' metadatas to disk file index.data
-    void flush_queues_metadatas();
+    // void flush_queues_metadatas();
 
-    // sweep caches
-    std::mutex wb_mutex_;
-    bool write_buffer_cleared = false;
-    void disable_all_write_buffers();
+    // std::mutex flush_mutex_;
+    // bool volatile flushed = false;
+    // void flush_all_before_read();
 
 private:
     String location_;
