@@ -34,6 +34,19 @@ PagedFile::PagedFile(const String& file) : file_(file) {
     struct stat s;
     ::fstat(fd_, &s);
     size_ = s.st_size;
+
+    // start buffer concumser thread
+    for (int i = 0; i < 2; ++i) {
+        std::thread wt([this, i]() {
+            SharedPtr<WriteBuffer> wb;
+            for (;;) {
+                wbq_[i].pop(wb);
+                flush(wb.get());
+                write_buffer_queue_.try_push(wb);
+            }
+        });
+        wt.detach();
+    }
 }
 
 PagedFile::~PagedFile() {
@@ -89,24 +102,22 @@ void PagedFile::async_flush() {
     write_buf->file = nullptr;
     tls_write_buffer_ = nullptr;
 
-    std::thread write_t([this, write_buf]() {
-        flush(write_buf.get());
-        write_buffer_queue_.try_push(write_buf);
-    });
-    write_t.detach();
+    wbq_[next_wbq_.fetch_add(1) & 1].push(write_buf);
 }
 
 uint64_t PagedFile::async_write(const FilePage* page) {
     if (!page) return NEGATIVE_OFFSET;
 
-    // initialize two write buffers, one for write, one for back
+    // initialize two write buffers, one for write, 6 for back
     if (!write_buffer_initialized_) {
         tls_write_buffer_ = std::make_shared<WriteBuffer>();
         tls_write_buffer_->start_offset = allocate_block(PAGED_FILE_WRITE_BUFFER_SIZE);
         tls_write_buffer_->current_pages = 0;
         tls_write_buffer_->file = this;
 
-        write_buffer_queue_.push(std::make_shared<WriteBuffer>());
+        for (int i = 0; i < 3; ++i) {
+            write_buffer_queue_.push(std::make_shared<WriteBuffer>());
+        }
 
         write_buffer_initialized_ = true;
     }
@@ -479,7 +490,7 @@ QueueStore::QueueStore(const String& location) : location_(location) {
 }
 
 QueueStore::~QueueStore() {
-    flush_queues_metadatas();
+    // flush_queues_metadatas();
 
     for (int i = 0; i < DATA_FILE_SPLITS; ++i) {
         delete data_files_[i];
@@ -549,6 +560,7 @@ void QueueStore::disable_all_write_buffers() {
     // clear all write buffers
     for (int i = 0; i < DATA_FILE_SPLITS; ++i) {
         data_files_[i]->clear_and_disable_write_buffer();
+        data_files_[i]->write_out_all_buffers();
     }
     write_buffer_cleared = true;
 }

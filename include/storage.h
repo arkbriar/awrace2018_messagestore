@@ -105,7 +105,7 @@ private:
 #define GIGA_BYTES(n) (uint64_t(n) << 30)
 #define TERA_BYTES(n) (uint64_t(n) << 40)
 // must be power of 2
-#define FILE_PAGE_SIZE KILO_BYTES(4)
+#define FILE_PAGE_SIZE KILO_BYTES(2)
 
 // File page header
 struct __attribute__((__packed__)) FilePageHeader {
@@ -164,11 +164,22 @@ class PagedFile {
     static thread_local bool write_buffer_initialized_;
     static thread_local SharedPtr<WriteBuffer> tls_write_buffer_;
     ConcurrentBoundedQueue<SharedPtr<WriteBuffer>> write_buffer_queue_;
+    Atomic<uint64_t> next_wbq_{0};
+    ConcurrentBoundedQueue<SharedPtr<WriteBuffer>> wbq_[2];
 
 public:
     void clear_and_disable_write_buffer() {
         write_buffer_queue_.set_capacity(0);
         write_buffer_queue_.clear();
+    }
+
+    void write_out_all_buffers() {
+        for (int i = 0; i < 2; ++i) {
+            SharedPtr<WriteBuffer> wb;
+            while (wbq_[i].try_pop(wb)) {
+                flush(wb.get());
+            }
+        }
     }
 
 public:

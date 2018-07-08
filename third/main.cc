@@ -3,6 +3,7 @@
 #include <csignal>
 #include <cstring>
 #include <iostream>
+#include <map>
 #include <ratio>
 #include <thread>
 #include <vector>
@@ -13,17 +14,17 @@ using namespace std;
 using namespace race2018;
 
 //发送阶段的发送数量，也即发送阶段必须要在规定时间内把这些消息发送完毕方可
-int msgNum = 100000000;
+int msgNum = 200000000;
 //队列的数量
-const int queueNum = 50000;
+const int queueNum = 1000000;
 
 //每个队列发送的数据量
 const int queueMsgNum = msgNum / queueNum;
 
 //正确性检测的次数
-const int checkNum = 50000;
+const int checkNum = 1000000;
 //消费阶段的总队列数量
-const int checkQueueNum = 50000;
+const int checkQueueNum = 100000;
 //发送的线程数量
 const int sendTsNum = 10;
 //消费的线程数量
@@ -32,7 +33,7 @@ const int checkTsNum = 10;
 const int consumerTsNum = 10;
 
 // 每个queue随机检查次数
-const int perQueueCheckNum = 10;
+const int perQueueCheckNum = 1;
 
 const std::string messagePrefix = "12345678901234567890123456789012345678901234567890-%d-%d";
 const std::string queueNamePrefix = "abc123-wyp-";
@@ -102,15 +103,22 @@ void RandCheck(vector<int> queueIndexList, int checkCount) {
     }
 }
 
-void ConsumeCheck(vector<int> queueIndexList) {
-    for (size_t index = 0; index < queueIndexList.size(); ++index) {
-        int startOffset = 0;
-        while (startOffset < queueMsgNum) {
-            int msgCount = random() % 10 + 5;
+void ConsumeCheck(vector<int> queueIndexList, map<int, int> offsets) {
+    while (!offsets.empty()) {
+        for (size_t index = 0; index < queueIndexList.size(); ++index) {
             int queueIndex = queueIndexList[index];
+            auto offset_it = offsets.find(queueIndex);
+            if (offset_it == offsets.end()) continue;
+
+            int &startOffset = offset_it->second;
+            int msgCount = 10;
             auto result = store.get(queueNamePrefix + to_string(queueIndex), startOffset, msgCount);
             CheckResult(queueIndex, startOffset, msgCount, result);
             startOffset += result.size();
+
+            if (startOffset == queueMsgNum) {
+                offsets.erase(offset_it);
+            }
         }
     }
 }
@@ -158,10 +166,15 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < consumerTsNum; ++i) {
             int thisThreadConsumeNum = checkQueueNum / consumerTsNum;
             vector<int> queueIndexList;
-            for (int j = 0; j < thisThreadConsumeNum; ++j) {
-                queueIndexList.push_back(random() % queueNum);
+            map<int, int> offsets;
+            while (offsets.size() != size_t(thisThreadConsumeNum)) {
+                int queueIndex = random() % queueNum;
+                if (offsets.find(queueIndex) == offsets.end()) {
+                    offsets[queueIndex] = 0;
+                    queueIndexList.push_back(queueIndex);
+                }
             }
-            consumerThreads.push_back(std::thread(ConsumeCheck, queueIndexList));
+            consumerThreads.push_back(std::thread(ConsumeCheck, queueIndexList, offsets));
         }
         for (int i = 0; i < consumerTsNum; ++i) {
             consumerThreads[i].join();
