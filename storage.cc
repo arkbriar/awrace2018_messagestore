@@ -27,8 +27,6 @@ void unmap_file_page(void* addr) {
     ::munmap(addr, FILE_PAGE_SIZE);
 }
 
-thread_local SharedPtr<PagedFile::WriteBuffer> PagedFile::tls_write_buffer_;
-
 PagedFile::PagedFile(const String& file) : file_(file) {
     fd_ = ::open(file.c_str(), O_RDWR | O_CREAT, 0644);
     assert(fd_ > 0);
@@ -73,41 +71,52 @@ void PagedFile::write(uint64_t offset, const FilePage* page) {
     if (ret == -1) perror("write page failed");
 }
 
-void PagedFile::flush() {
+thread_local SharedPtr<PagedFile::WriteBuffer> PagedFile::tls_write_buffer_;
+thread_local bool PagedFile::write_buffer_initialized_ = false;
+
+void PagedFile::flush(WriteBuffer* write_buf) {
     // time to flush
-    int ret =
-        ::pwrite(fd_, tls_write_buffer_->buf, tls_write_buffer_->current_pages * FILE_PAGE_SIZE,
-                 tls_write_buffer_->start_offset);
+    int ret = ::pwrite(fd_, write_buf->buf, write_buf->current_pages * FILE_PAGE_SIZE,
+                       write_buf->start_offset);
     if (ret == -1) perror("write buffer failed");
-    tls_write_buffer_->current_pages = 0;
-    tls_write_buffer_->start_offset = NEGATIVE_OFFSET;
+    write_buf->current_pages = 0;
+    write_buf->start_offset = NEGATIVE_OFFSET;
 }
 
 void PagedFile::async_flush() {
-    char* buf = tls_write_buffer_->buf;
-    uint64_t size = tls_write_buffer_->current_pages * FILE_PAGE_SIZE;
-    uint64_t offset = tls_write_buffer_->start_offset;
-    tls_write_buffer_->buf = new char[PAGED_FILE_WRITE_BUFFER_SIZE];
-    tls_write_buffer_->current_pages = 0;
-    tls_write_buffer_->start_offset = NEGATIVE_OFFSET;
-    std::thread write_t([this, buf, size, offset]() {
-        int ret = ::pwrite(fd_, buf, size, offset);
-        if (ret == -1) perror("write buffer failed");
-        ::free(buf);
+    auto write_buf = tls_write_buffer_;
+    // disable flush on destruction
+    write_buf->file = nullptr;
+    tls_write_buffer_ = nullptr;
+
+    std::thread write_t([this, write_buf]() {
+        flush(write_buf.get());
+        write_buffer_queue_.try_push(write_buf);
     });
     write_t.detach();
 }
 
-uint64_t PagedFile::write(const FilePage* page) {
+uint64_t PagedFile::async_write(const FilePage* page) {
     if (!page) return NEGATIVE_OFFSET;
 
-    // lazy allocate buffer
-    if (!tls_write_buffer_) {
+    // initialize two write buffers, one for write, one for back
+    if (!write_buffer_initialized_) {
         tls_write_buffer_ = std::make_shared<WriteBuffer>();
         tls_write_buffer_->start_offset = allocate_block(PAGED_FILE_WRITE_BUFFER_SIZE);
+        tls_write_buffer_->current_pages = 0;
         tls_write_buffer_->file = this;
-    } else if (tls_write_buffer_->start_offset == NEGATIVE_OFFSET) {
+
+        write_buffer_queue_.push(std::make_shared<WriteBuffer>());
+
+        write_buffer_initialized_ = true;
+    }
+
+    // get next buffer
+    if (!tls_write_buffer_) {
+        write_buffer_queue_.pop(tls_write_buffer_);
         tls_write_buffer_->start_offset = allocate_block(PAGED_FILE_WRITE_BUFFER_SIZE);
+        tls_write_buffer_->current_pages = 0;
+        tls_write_buffer_->file = this;
     }
 
     uint64_t offset_buf = tls_write_buffer_->current_pages * FILE_PAGE_SIZE;
@@ -120,10 +129,8 @@ uint64_t PagedFile::write(const FilePage* page) {
     if (tls_write_buffer_->current_pages >= PAGES_IN_WRITE_BUFFER) {
         // time to flush
         async_flush();
-        // reset buffer
-        tls_write_buffer_->start_offset = allocate_block(PAGED_FILE_WRITE_BUFFER_SIZE);
-        tls_write_buffer_->current_pages = 0;
     }
+
     return page->header.offset;
 }
 
@@ -227,7 +234,7 @@ void MessageQueue::flush_last_page(bool release) {
     std::unique_lock<std::mutex> lock(wq_mutex_);
     if (!last_page_) return;
 
-    paged_message_indices_.back().page_idx = data_file_->write(last_page_) / FILE_PAGE_SIZE;
+    paged_message_indices_.back().page_idx = data_file_->async_write(last_page_) / FILE_PAGE_SIZE;
     if (release) {
         delete last_page_;
         last_page_ = nullptr;
@@ -442,7 +449,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
             if (page_ptr->header.offset != index.page_idx * FILE_PAGE_SIZE) {
                 data_file_->read(index.page_idx * FILE_PAGE_SIZE, page_ptr.get());
             }
-            assert(page_ptr->header.offset == index.page_offset);
+            assert(page_ptr->header.offset == index.page_idx * FILE_PAGE_SIZE);
             read_msgs(index, offset, number, page_ptr->content, msgs);
         } else {
             // read all messages to msgs
@@ -535,7 +542,21 @@ void QueueStore::put(const String& queue_name, const MemBlock& message) {
     q_ptr->put(message);
 }
 
+void QueueStore::disable_all_write_buffers() {
+    if (write_buffer_cleared) return;
+    std::unique_lock<std::mutex> lock(wb_mutex_);
+    if (write_buffer_cleared) return;
+    // clear all write buffers
+    for (int i = 0; i < DATA_FILE_SPLITS; ++i) {
+        data_files_[i]->clear_and_disable_write_buffer();
+    }
+    write_buffer_cleared = true;
+}
+
 Vector<MemBlock> QueueStore::get(const String& queue_name, long offset, long size) {
+    // sweep all queues' writing cache
+    if (!write_buffer_cleared) disable_all_write_buffers();
+
     auto q_ptr = find_queue(queue_name);
     if (q_ptr) return q_ptr->get(offset, size);
     // return empty list when queue is not found

@@ -153,17 +153,23 @@ using FilePageWriter = std::function<void(char*)>;
 #define PAGES_IN_WRITE_BUFFER (PAGED_FILE_WRITE_BUFFER_SIZE / FILE_PAGE_SIZE)
 class PagedFile {
     struct WriteBuffer {
-        char* buf;
+        char buf[PAGED_FILE_WRITE_BUFFER_SIZE];
         uint64_t current_pages = 0;
         uint64_t start_offset = NEGATIVE_OFFSET;
-        PagedFile* file;
-        WriteBuffer() { buf = new char[PAGED_FILE_WRITE_BUFFER_SIZE]; }
+        PagedFile* volatile file = nullptr;
         ~WriteBuffer() {
-            file->flush();
-            delete buf;
+            if (file) file->flush(this);
         }
     };
+    static thread_local bool write_buffer_initialized_;
     static thread_local SharedPtr<WriteBuffer> tls_write_buffer_;
+    ConcurrentBoundedQueue<SharedPtr<WriteBuffer>> write_buffer_queue_;
+
+public:
+    void clear_and_disable_write_buffer() {
+        write_buffer_queue_.set_capacity(0);
+        write_buffer_queue_.clear();
+    }
 
 public:
     PagedFile(const String& file);
@@ -177,10 +183,10 @@ public:
     void write(uint64_t offset, const FilePageWriter& writer);
     void write(uint64_t offset, const FilePage* page);
     // this is thread local buffered write
-    uint64_t write(const FilePage* page);
+    uint64_t async_write(const FilePage* page);
     void mapped_read(uint64_t offset, const FilePageReader& reader);
     void mapped_write(uint64_t offset, const FilePageWriter& writer);
-    void flush();
+    void flush(WriteBuffer* write_buf);
     void async_flush();
     uint64_t allocate_block(size_t size) { return page_offset.next_raw(size); }
 #ifdef __linux__
@@ -293,6 +299,11 @@ protected:
     void load_queues_metadatas();
     // flush all queues' metadatas to disk file index.data
     void flush_queues_metadatas();
+
+    // sweep caches
+    std::mutex wb_mutex_;
+    bool write_buffer_cleared = false;
+    void disable_all_write_buffers();
 
 private:
     String location_;

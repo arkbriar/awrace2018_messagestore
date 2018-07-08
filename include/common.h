@@ -43,6 +43,8 @@ using CircularBuffer = boost::circular_buffer<T>;
 template <class T>
 using SharedPtr = std::shared_ptr<T>;
 template <class T>
+using WeakPtr = std::weak_ptr<T>;
+template <class T>
 using UniquePtr = std::unique_ptr<T>;
 template <class T>
 using ScopedPtr = boost::scoped_ptr<T>;
@@ -60,8 +62,8 @@ template <class T>
 using ConcurrentVector = tbb::concurrent_vector<T>;
 template <class T>
 using ConcurrentQueue = tbb::concurrent_queue<T>;
-// template <class K, class V>
-// using ConcurrentLruCache = tbb::concurrent_lru_cache<K, V, typename std::function<V(K)>>;
+template <class T>
+using ConcurrentBoundedQueue = tbb::concurrent_bounded_queue<T>;
 }  // namespace race2018
 
 #endif  // QUEUE_RACE_COMMON_H
