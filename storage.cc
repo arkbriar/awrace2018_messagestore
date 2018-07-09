@@ -5,7 +5,7 @@
 #include <tbb/parallel_for.h>
 #include <map>
 #include <thread>
-#include <google/malloc_extension.h>
+#include <gperftools/malloc_extension.h>
 
 namespace race2018 {
 
