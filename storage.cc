@@ -181,7 +181,7 @@ uint64_t PagedFile::tls_write(const FilePage* page) {
         auto buf_to_flush = back_buf;
         auto buf_mutex_ptr = back_buf_mutex;
         auto status_ptr = back_buf_status;
-        auto std::thread flush_th([buf_to_flush, status_ptr, buf_mutex_ptr]() {
+        std::thread flush_th([buf_to_flush, status_ptr, buf_mutex_ptr]() {
             std::unique_lock<std::mutex> lock(*buf_mutex_ptr);
             uint32_t exp = BACK_BUF_FLUSH_SCHEDULED;
             status_ptr->compare_exchange_strong(exp, BACK_BUF_FLUSHING);
