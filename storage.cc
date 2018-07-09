@@ -5,6 +5,7 @@
 #include <tbb/parallel_for.h>
 #include <map>
 #include <thread>
+#include <google/malloc_extension.h>
 
 namespace race2018 {
 
@@ -327,7 +328,7 @@ void MessageQueue::flush_last_page(bool release) {
     paged_message_indices_.back().page_idx =
         store_->tls_get_data_file()->tls_write(last_page_) / FILE_PAGE_SIZE;
     if (release) {
-        delete last_page_;
+        ::free(last_page_);
         last_page_ = nullptr;
     }
 }
@@ -585,6 +586,8 @@ void QueueStore::flush_all_before_read() {
         mq_ptr->flush_last_page(true);
     }
     this->tls_get_data_file()->tls_flush();
+    // release free memory back to os
+    MallocExtension::instance()->ReleaseFreeMemory();
 
     // using RangeType = ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_range_type;
     // size_t grainsize = queues_.size() / std::thread::hardware_concurrency();
