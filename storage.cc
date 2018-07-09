@@ -487,15 +487,16 @@ uint32_t MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset
     return size;
 }
 
-static thread_local ConcurrentHashMap<uint32_t, FilePage> file_pages;
+static thread_local ConcurrentHashMap<uint32_t, Pair<uint8_t, FilePage>> file_pages;
 Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     decltype(file_pages)::accessor ac;
     file_pages.find(ac, queue_id_);
     if (ac.empty()) {
         file_pages.emplace(ac);
-        ac->second.header.offset = NEGATIVE_OFFSET;
+        ac->second.first = 0xff;
     }
-    FilePage& page = ac->second;
+    uint8_t& file_idx = ac->second.first;
+    FilePage& page = ac->second.second;
 
     size_t first_page_idx = binary_search_indices(offset);
 
@@ -521,7 +522,9 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
         // load from data file
-        if (page.header.offset != uint64_t(index.page_idx) * FILE_PAGE_SIZE) {
+        if (file_idx != index.file_idx ||
+            page.header.offset != uint64_t(index.page_idx) * FILE_PAGE_SIZE) {
+            file_idx = index.file_idx;
             auto data_file_ptr = store_->get_data_file(index.file_idx);
             data_file_ptr->read(uint64_t(index.page_idx) * FILE_PAGE_SIZE, (char*)&page,
                                 FILE_PAGE_SIZE);

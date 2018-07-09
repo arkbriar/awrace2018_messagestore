@@ -225,7 +225,6 @@ private:
  * into individual queues.
  ------------------------------------------------*/
 
-class QueueStore;
 struct __attribute__((__packed__)) MessagePageIndex {
     uint32_t volatile page_idx;
     uint32_t prev_total_msg_size;
@@ -237,6 +236,7 @@ struct __attribute__((__packed__)) MessagePageIndex {
     uint32_t total_msg_size() const { return prev_total_msg_size + msg_size; }
 };
 
+class QueueStore;
 class MessageQueue {
     friend class QueueStore;
 
