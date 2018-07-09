@@ -480,12 +480,7 @@ uint32_t MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset
     return size;
 }
 
-static thread_local std::map<uint32_t, SharedPtr<MappedFilePagePtr>> read_cache;
-
 Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
-    // get current thread's reading buffer
-    auto cache_ptr = read_cache[queue_id_];
-
     size_t first_page_idx = binary_search_indices(offset);
 
     // messages from offset is not found
@@ -506,19 +501,16 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     Vector<MemBlock> msgs;
     msgs.reserve(number);
 
+    FilePage page;
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
-        if (!cache_ptr || !*cache_ptr ||
-            (*cache_ptr)->header.offset != uint64_t(index.page_idx) * FILE_PAGE_SIZE) {
-            // load from data file
-            auto data_file_ptr = store_->get_data_file(index.file_idx);
-            cache_ptr = std::make_shared<MappedFilePagePtr>(
-                data_file_ptr->fd(), uint64_t(index.page_idx) * FILE_PAGE_SIZE, true);
-        }
+        // load from data file
+        auto data_file_ptr = store_->get_data_file(index.file_idx);
+        data_file_ptr->read(uint64_t(index.page_idx) * FILE_PAGE_SIZE, (char*)&page,
+                            FILE_PAGE_SIZE);
         // attention, here must be reference!
-        auto& page_ptr = *cache_ptr;
-        assert(page_ptr->header.offset == index.page_idx * FILE_PAGE_SIZE);
-        read_msgs(index, offset, number, page_ptr->content, msgs);
+        assert(page.header.offset == index.page_idx * FILE_PAGE_SIZE);
+        read_msgs(index, offset, number, page.content, msgs);
     }
 
     return msgs;
