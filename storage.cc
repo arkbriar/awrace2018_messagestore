@@ -168,14 +168,14 @@ uint64_t PagedFile::tls_write(const FilePage* page) {
         // buffer is full, switch to back
         {
             // spin wait until back buf is not in scheduled status
-            while (back_buf_status.load() == BACK_BUF_FLUSH_SCHEDULED)
+            while (back_buf_status->load() == BACK_BUF_FLUSH_SCHEDULED)
                 ;
             // try swap active and back buffer
             std::unique_lock<std::mutex> lock(*back_buf_mutex);
             std::swap(active_buf, back_buf);
-            assert(back_buf_status.load() == BACK_BUF_FREE);
+            assert(back_buf_status->load() == BACK_BUF_FREE);
             uint32_t exp = BACK_BUF_FREE;
-            back_buf_status.compare_exchange_strong(exp, BACK_BUF_FLUSH_SCHEDULED);
+            back_buf_status->compare_exchange_strong(exp, BACK_BUF_FLUSH_SCHEDULED);
         }
         // start a thread to flush full (back) buf
         auto buf_to_flush = back_buf;
@@ -206,7 +206,7 @@ void PagedFile::tls_flush() {
         active_buf->flush();
 
         // spin wait until back buf is not in scheduled status
-        while (back_buf_status.load() == BACK_BUF_FLUSH_SCHEDULED)
+        while (back_buf_status->load() == BACK_BUF_FLUSH_SCHEDULED)
             ;
         // wait for back to be flushed
         std::unique_lock<std::mutex> lock(*back_buf_mutex);
