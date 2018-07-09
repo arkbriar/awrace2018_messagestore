@@ -179,9 +179,10 @@ public:
     bool async_read(const AsyncReadRequset& request);
 
 protected:
-    std::thread* async_reader_ = nullptr;
+    Atomic<bool> async_reader_started{false};
+    std::thread async_reader_[4];
     ConcurrentBoundedQueue<AsyncReadRequset> async_read_requests_;
-    void start_async_reader();
+    void start_async_readers();
 
     SteppedValue<uint64_t> page_offset{FILE_PAGE_SIZE};
 

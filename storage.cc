@@ -37,7 +37,6 @@ PagedFile::PagedFile(const String& file) : file_(file) {
 }
 
 PagedFile::~PagedFile() {
-    if (async_reader_) delete async_reader_;
     if (fd_ > 0) ::close(fd_);
 }
 
@@ -113,28 +112,32 @@ void PagedFile::mapped_write(uint64_t offset, const FilePageWriter& writer) {
     }
 }
 
-void PagedFile::start_async_reader() {
-    if (async_reader_) return;
-    async_reader_ = new std::thread([this]() {
-        // handle read requests and read
-        AsyncReadRequset arr;
-        for (;;) {
-            async_read_requests_.pop(arr);
-            // ignore invalid request
-            if (!arr.cb_queue) continue;
+void PagedFile::start_async_readers() {
+    bool exp = false;
+    if (async_reader_started.compare_exchange_strong(exp, true)) {
+        for (int i = 0; i < 4; ++i) {
+            async_reader_[i] = std::thread([this]() {
+                // handle read requests and read
+                AsyncReadRequset arr;
+                for (;;) {
+                    async_read_requests_.pop(arr);
+                    // ignore invalid request
+                    if (!arr.cb_queue) continue;
 
-            read(uint64_t(arr.page_idx) * FILE_PAGE_SIZE, arr.page.get());
+                    read(uint64_t(arr.page_idx) * FILE_PAGE_SIZE, arr.page.get());
 
-            // try to send back, if failed, destory it
-            arr.cb_queue->try_push(arr.page);
+                    // try to send back, if failed, destory it
+                    arr.cb_queue->try_push(arr.page);
+                }
+            });
+            async_reader_[i].detach();
         }
-    });
-    async_reader_->detach();
+    }
 }
 
 bool PagedFile::async_read(const AsyncReadRequset& request) {
     if (!request.cb_queue) return false;
-    if (!async_reader_) start_async_reader();
+    if (!async_reader_started.load()) start_async_readers();
 
     return async_read_requests_.try_push(request);
 }
