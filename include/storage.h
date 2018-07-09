@@ -205,7 +205,7 @@ private:
     char buf_[TLS_WRITE_BUFFER_SIZE];
     std::mutex mutex_;
     uint16_t volatile page_count_ = 0;
-    uint16_t file_offset_;
+    uint64_t file_offset_;
     PagedFile* file_;
 };
 
