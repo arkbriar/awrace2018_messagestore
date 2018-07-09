@@ -148,7 +148,7 @@ static thread_local bool buffer_allocated = false;
 // to protect back_buf from
 static thread_local SharedPtr<std::mutex> back_buf_mutex;
 const uint32_t BACK_BUF_FREE = 0, BACK_BUF_FLUSH_SCHEDULED = 1, BACK_BUF_FLUSHING = 2;
-static thread_local Atomic<uint32_t> back_buf_status;
+static thread_local SharedPtr<Atomic<uint32_t>> back_buf_status;
 // active is for writing, and back is always free or in flushing
 static thread_local SharedPtr<TLSWriteBuffer> active_buf, back_buf;
 
@@ -158,6 +158,7 @@ uint64_t PagedFile::tls_write(const FilePage* page) {
         back_buf_mutex = std::make_shared<std::mutex>();
         active_buf = std::make_shared<TLSWriteBuffer>(this);
         back_buf = std::make_shared<TLSWriteBuffer>(this);
+        back_buf_status = std::make_shared<Atomic<uint32_t>>(0);
         active_buf->allocate_offset();
         buffer_allocated = true;
     }
@@ -179,15 +180,16 @@ uint64_t PagedFile::tls_write(const FilePage* page) {
         // start a thread to flush full (back) buf
         auto buf_to_flush = back_buf;
         auto buf_mutex_ptr = back_buf_mutex;
-        std::thread flush_th([buf_to_flush, buf_mutex_ptr]() {
+        auto status_ptr = back_buf_status;
+        auto std::thread flush_th([buf_to_flush, status_ptr, buf_mutex_ptr]() {
             std::unique_lock<std::mutex> lock(*buf_mutex_ptr);
             uint32_t exp = BACK_BUF_FLUSH_SCHEDULED;
-            back_buf_status.compare_exchange_strong(exp, BACK_BUF_FLUSHING);
+            status_ptr->compare_exchange_strong(exp, BACK_BUF_FLUSHING);
             // going to flush
             buf_to_flush->flush();
 
             exp = BACK_BUF_FLUSHING;
-            back_buf_status.compare_exchange_strong(exp, BACK_BUF_FREE);
+            back_buf_status->compare_exchange_strong(exp, BACK_BUF_FREE);
         });
         flush_th.detach();
 
