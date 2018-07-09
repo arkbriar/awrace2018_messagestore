@@ -487,7 +487,15 @@ uint32_t MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset
     return size;
 }
 
+static thread_local ConcurrentHashMap<uint32_t, FilePage> file_pages;
 Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
+    decltype(file_pages)::accessor ac;
+    file_pages.find(ac, queue_id_);
+    if (ac.empty()) {
+        file_pages.emplace(ac);
+    }
+    FilePage& page = ac->second;
+
     size_t first_page_idx = binary_search_indices(offset);
 
     // messages from offset is not found
@@ -509,7 +517,6 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     msgs.reserve(number);
 
     uint16_t msgs_left = 0;
-    FilePage page;
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
         // load from data file
@@ -603,6 +610,7 @@ void QueueStore::flush_all_before_read() {
     this->tls_get_data_file()->tls_flush();
     // release free memory back to os
     MallocExtension::instance()->ReleaseFreeMemory();
+    MallocExtension::instance()->SetMemoryReleaseRate(10.0);
 
     // using RangeType = ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_range_type;
     // size_t grainsize = queues_.size() / std::thread::hardware_concurrency();
