@@ -147,12 +147,12 @@ bool PagedFile::async_read(const AsyncReadRequset& request) {
 static thread_local bool buffer_allocated = false;
 // to protect back_buf from
 static thread_local SharedPtr<std::mutex> back_buf_mutex;
-const uint8_t BACK_BUF_FREE = 0, BACK_BUF_FLUSH_SCHEDULED = 1, BACK_BUF_FLUSHING = 2;
-static thread_local Atomic<uint8_t> back_buf_status;
+const uint32_t BACK_BUF_FREE = 0, BACK_BUF_FLUSH_SCHEDULED = 1, BACK_BUF_FLUSHING = 2;
+static thread_local Atomic<uint32_t> back_buf_status;
 // active is for writing, and back is always free or in flushing
 static thread_local SharedPtr<TLSWriteBuffer> active_buf, back_buf;
 
-uint64_t tls_write(const FilePage* page) {
+uint64_t PagedFile::tls_write(const FilePage* page) {
     // initiliaze buffers
     if (!buffer_allocated) {
         back_buf_mutex = std::make_shared<std::mutex>();
@@ -172,7 +172,7 @@ uint64_t tls_write(const FilePage* page) {
             std::unique_lock<std::mutex> lock(*back_buf_mutex);
             std::swap(active_buf, back_buf);
             assert(back_buf_status.load() == BACK_BUF_FREE);
-            uint8_t exp = BACK_BUF_FREE;
+            uint32_t exp = BACK_BUF_FREE;
             back_buf_status.compare_and_exchange_strong(exp, BACK_BUF_FLUSH_SCHEDULED);
         }
         // start a thread to flush full (back) buf
@@ -180,7 +180,7 @@ uint64_t tls_write(const FilePage* page) {
         auto buf_mutex_ptr = back_buf_mutex;
         std::thread flush_th([buf_to_flush, buf_mutex_ptr]() {
             std::unique_lock<std::mutex> lock(*buf_mutex_ptr);
-            uint8_t exp = BACK_BUF_FLUSH_SCHEDULED;
+            uint32_t exp = BACK_BUF_FLUSH_SCHEDULED;
             back_buf_status.compare_and_exchange_strong(exp, BACK_BUF_FLUSHING);
             // going to flush
             buf_to_flush->flush();
@@ -193,7 +193,7 @@ uint64_t tls_write(const FilePage* page) {
     return page_offset;
 }
 
-void tls_flush() {
+void PagedFile::tls_flush() {
     if (active_buf) {
         // flush active and wait back to be flushed
         active_buf->flush();
@@ -212,7 +212,7 @@ TLSWriteBuffer::~TLSWriteBuffer() {
     if (page_count_ > 0) flush();
 }
 
-uint64_t write(FilePage* page) {
+uint64_t TLSWriteBuffer::write(FilePage* page) {
     if (page_count_ >= TLS_WRITE_BUFFER_PAGE_SIZE) return NEGATIVE_OFFSET;
 
     memcpy(buf_ + uint64_t(page_count_) * FILE_PAGE_SIZE, (const void*)page, FILE_PAGE_SIZE);
@@ -316,7 +316,7 @@ void MessageQueue::flush_last_page(bool release) {
 
     paged_message_indices_.back().file_idx = store_->tls_data_file_idx();
     paged_message_indices_.back().page_idx =
-        store_->get_data_file()->tls_write(last_page_) / FILE_PAGE_SIZE;
+        store_->tls_get_data_file()->tls_write(last_page_) / FILE_PAGE_SIZE;
     if (release) {
         delete last_page_;
         last_page_ = nullptr;
@@ -562,7 +562,11 @@ int8_t tls_data_file_idx() {
     return file_idx;
 }
 
-PagedFile* QueueStore::get_data_file() { return data_files_[tls_data_file_idx()]; }
+PagedFile* QueueStore::tls_get_data_file() { return data_files_[tls_data_file_idx()]; }
+PagedFile* QueueStore::get_data_file(uint8_t idx) {
+    assert(idx < DATA_FILE_SPLITS);
+    return data_files_[idx];
+}
 
 SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_name) {
     ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_accessor ac;
@@ -600,7 +604,7 @@ void QueueStore::flush_all_before_read() {
             auto mq_ptr = it->second;
             mq_ptr->flush_last_page(true);
         }
-        this->get_data_file()->tls_flush();
+        this->tls_get_data_file()->tls_flush();
     });
     flushed = true;
 }

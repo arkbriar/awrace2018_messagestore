@@ -147,6 +147,8 @@ private:
     FilePage* file_page_ = nullptr;
 };
 
+using FilePageReader = std::function<void(const char*)>;
+using FilePageWriter = std::function<void(char*)>;
 class PagedFile {
 public:
     PagedFile(const String& file);
@@ -205,7 +207,7 @@ private:
     uint16_t volatile page_count_ = 0;
     uint16_t file_offset_;
     PagedFile* file_;
-}
+};
 
 /* -----------------------------------------------
  * MessageQueue and QueueStore, to divide the storage
@@ -293,7 +295,8 @@ public:
     String index_file_path() const { return location_ + "/index.data"; }
 
     int8_t tls_data_file_idx();
-    PagedFile* get_data_file();
+    PagedFile* tls_get_data_file();
+    PagedFile* get_data_file(uint8_t idx);
 
 protected:
     static thread_local int8_t file_idx;
