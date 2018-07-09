@@ -631,6 +631,8 @@ QueueStore::QueueStore(const String& location) : location_(location) {
         data_files_[i] = new PagedFile(data_file_path(i));
     }
 
+    LOG("Version: 2018-07-09 05:23");
+
     // currently loading from index file is disabled.
     /* load_queues_metadatas(); */
 }
