@@ -587,7 +587,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
         cache_ptr->clear_left_msgs();
     }
 
-    uint32_t msg_left_unread = 0;
+    uint32_t msgs_left_unread = 0;
     auto page_ptr = cache_ptr->page;
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
@@ -597,7 +597,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
                 ->read(index.page_idx * FILE_PAGE_SIZE, page_ptr.get());
         }
         assert(page_ptr->header.offset == index.page_idx * FILE_PAGE_SIZE);
-        msg_left_unread = read_msgs(index, offset, number, page_ptr->content, msgs);
+        msgs_left_unread = read_msgs(index, offset, number, page_ptr->content, msgs);
     }
 
     // if msgs left in page <= 10, read them all, schedule a next page read
