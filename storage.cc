@@ -115,7 +115,6 @@ void PagedFile::mapped_write(uint64_t offset, const FilePageWriter& writer) {
 
 void PagedFile::start_async_reader() {
     if (async_reader_) return;
-    async_read_requests_.set_capacity(200000);
     async_reader_ = new std::thread([this]() {
         // handle read requests and read
         AsyncReadRequset arr;
@@ -589,7 +588,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     uint32_t msgs_left_unread = 0;
     auto page_ptr = cache_ptr->page;
     if (first_page_idx <= last_page_idx) {
-        LOG("cached page offset: %ld, wanted page offset: %ld\n", page_ptr->header.offset,
+        // LOG("cached page offset: %ld, wanted page offset: %ld\n", page_ptr->header.offset,
             paged_message_indices_[first_page_idx].page_idx * FILE_PAGE_SIZE);
     }
 
