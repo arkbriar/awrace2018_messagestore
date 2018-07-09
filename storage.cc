@@ -508,11 +508,12 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
 
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
-        if (!cache_ptr || (*cache_ptr)->header.offset != index.page_idx * FILE_PAGE_SIZE) {
+        if (!cache_ptr ||
+            (*cache_ptr)->header.offset != uint64_t(index.page_idx) * FILE_PAGE_SIZE) {
             // load from data file
             auto data_file_ptr = store_->get_data_file(index.file_idx);
-            cache_ptr = std::make_shared<MappedFilePagePtr>(data_file_ptr->fd(),
-                                                            index.page_idx * FILE_PAGE_SIZE, true);
+            cache_ptr = std::make_shared<MappedFilePagePtr>(
+                data_file_ptr->fd(), uint64_t(index.page_idx) * FILE_PAGE_SIZE, true);
         }
         auto page_ptr = *cache_ptr;
         assert(page_ptr->header.offset == index.page_idx * FILE_PAGE_SIZE);
