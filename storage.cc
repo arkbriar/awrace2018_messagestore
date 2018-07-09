@@ -189,7 +189,7 @@ uint64_t PagedFile::tls_write(const FilePage* page) {
             buf_to_flush->flush();
 
             exp = BACK_BUF_FLUSHING;
-            back_buf_status->compare_exchange_strong(exp, BACK_BUF_FREE);
+            status_ptr->compare_exchange_strong(exp, BACK_BUF_FREE);
         });
         flush_th.detach();
 
