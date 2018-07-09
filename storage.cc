@@ -124,14 +124,10 @@ void PagedFile::start_async_reader() {
             // ignore invalid request
             if (!arr.cb_queue) continue;
 
-            // load page
-            FilePage* page = new FilePage();
-            read(uint64_t(arr.page_idx) * FILE_PAGE_SIZE, page);
+            read(uint64_t(arr.page_idx) * FILE_PAGE_SIZE, arr.page.get());
 
             // try to send back, if failed, destory it
-            if (!arr.cb_queue->try_push(page)) {
-                delete page;
-            }
+            arr.cb_queue->try_push(page)
         }
     });
     async_reader_->detach();
@@ -451,8 +447,8 @@ uint16_t MessageQueue::extract_message_length(const char*& ptr) {
 
 #define UNCOMPRESS_NONE(_begin, _size, _out_msg) _out_msg = new_memblock(_begin, _size);
 
-void MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset, uint32_t& num,
-                             const char* ptr, Vector<MemBlock>& msgs) {
+uint32_t MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset, uint32_t& num,
+                                 const char* ptr, Vector<MemBlock>& msgs) {
     uint64_t cur_offset = index.prev_total_msg_size;
     uint16_t size = index.msg_size;
     if (offset >= cur_offset + size) return;
@@ -478,27 +474,70 @@ void MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset, ui
         begin += msg_size;
         ++cur_offset, ++offset, --num, --size;
     }
+
+    return size;
 }
 
-static thread_local std::map<uint32_t, SharedPtr<FilePage>> reading_pages;
+struct TLSMessageReadCache {
+    SharedPtr<FilePage> page;
+    uint32_t left_msg_page;
+    Vector<MemBlock> msgs_left;
+    bool preread_page = false;
+    SharedPtr<ConcurrentBoundedQueue<SharedPtr<FilePage>>> preread_queue;
+
+    MessageReadCache() { preread_queue = std::make_shared<ConcurrentBoundedQueue>(); }
+    ~MessageReadCache() {
+        preread_queue->set_capacity(0);
+        clear_left_msgs();
+    }
+
+    bool schedule_read(uint32_t page_idx, PagedFile* file) {
+        if (!preread_page) {
+            PagedFile::AsyncReadRequset arr;
+            arr.page_idx = page_idx;
+            arr.page = page;
+            arr.cb_queue = preread_queue;
+            page.reset();
+            file->async_read(arr);
+            preread_page = true;
+            return true;
+        }
+        return false;
+    }
+
+    bool populate_preread_page() {
+        if (preread_page) {
+            preread_queue.pop(page);
+            preread_page = false;
+            return true;
+        }
+        return false;
+    }
+
+    void clear_left_msgs() {
+        for (auto& msg : msgs_left) {
+            if (msg.ptr) delete msg.ptr;
+        }
+        msgs_left.clear();
+    }
+}
+
+static thread_local std::map<uint32_t, SharedPtr<TLSMessageReadCache>>
+    read_cache;
 
 Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     // get current thread's reading buffer
     auto it = reading_pages.find(queue_id_);
-    auto page_ptr = it == reading_pages.end() ? nullptr : it->second;
-    if (page_ptr == nullptr) {
+    auto cache_ptr = it == reading_pages.end() ? nullptr : it->second;
+    if (cache_ptr == nullptr) {
         // try allocate one
-        try {
-            page_ptr = SharedPtr<FilePage>(new FilePage());
-        } catch (std::bad_alloc ex) {
-            // ignore bad alloc
-            LOG("bad alloc");
-        }
-        if (page_ptr) {
-            page_ptr->header.offset = NEGATIVE_OFFSET;
-            reading_pages.insert(std::make_pair(queue_id_, page_ptr));
-        }
+        cache_ptr = SharedPtr<TLSMessageReadCache>(new TLSMessageReadCache());
+        read_cache.insert(std::make_pair(queue_id_, cache_ptr));
     }
+    cache_ptr->populate_preread_page();
+    // if there are no preread page and cur page is not initialized,
+    // new a page
+    if (!cache_ptr->page) cache_ptr->page = std::make_shared<FilePage>();
 
     size_t first_page_idx = binary_search_indices(offset);
 
@@ -520,28 +559,59 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     Vector<MemBlock> msgs;
     msgs.reserve(number);
 
+    // if msgs in prev page is the msgs wanted, add them directly, otherwise clear it
+    if (cache_ptr->msgs_left.size() > 0 &&
+        cache_ptr->left_msg_page == paged_message_indices_[first_page_idx].page_idx) {
+        msgs_start_off =
+            paged_message_indices_[first_page_idx].total_msg_size() - cache_ptr->msgs_left.size();
+        if (msgs_start_off > offset) {
+            cache_ptr->clear_left_msgs();
+        } else {
+            while (msgs_start_off < offset) {
+                cache_ptr->msgs_left.pop_front();
+                ++msgs_start_off;
+            }
+            while (!cache_ptr->msgs_left.empty()) {
+                msgs.push_back(cache_ptr->msgs_left.front());
+                cache_ptr->msgs_left.pop_front();
+                ++offset, --number;
+            }
+            ++first_page_idx;
+        }
+    } else {
+        cache_ptr->clear_left_msgs();
+    }
+
+    uint32_t msg_left_unread = 0;
+    auto page_ptr = cache_ptr->page;
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
-        if (page_ptr) {
-            if (page_ptr->header.offset != index.page_idx * FILE_PAGE_SIZE) {
-                store_->get_data_file(index.file_idx)
-                    ->read(index.page_idx * FILE_PAGE_SIZE, page_ptr.get());
-            }
-            assert(page_ptr->header.offset == index.page_idx * FILE_PAGE_SIZE);
-            read_msgs(index, offset, number, page_ptr->content, msgs);
-        } else {
-            // read all messages to msgs
+
+        if (page_ptr->header.offset != index.page_idx * FILE_PAGE_SIZE) {
             store_->get_data_file(index.file_idx)
-                ->read(index.page_idx * FILE_PAGE_SIZE,
-                       [this, &index, &offset, &number, &msgs](const char* ptr) {
-                           this->read_msgs(index, offset, number, ptr, msgs);
-                       });
+                ->read(index.page_idx * FILE_PAGE_SIZE, page_ptr.get());
+        }
+        assert(page_ptr->header.offset == index.page_idx * FILE_PAGE_SIZE);
+        msg_left_unread = read_msgs(index, offset, number, page_ptr->content, msgs);
+    }
+
+    // if msgs left in page <= 10, read them all, schedule a next page read
+    if (msgs_left_unread > 0 && msgs_left_unread <= 10) {
+        cache_ptr->clear_left_msgs();
+        auto unread_offset = offset;
+        read_msgs(paged_message_indices_[last_page_idx], unread_offset, msgs_left_unread,
+                  cache_ptr->msgs_left);
+        cache_ptr->left_msg_page = paged_message_indices_[last_page_idx].page_idx;
+        if (last_page_idx + 1 != paged_message_indices_.size()) {
+            auto next_msg_index = paged_message_indices_[last_page_idx + 1];
+            cache_ptr->schedule_read(next_msg_index.page_idx,
+                                     store_->get_data_file(next_msg_index.file_idx));
         }
     }
 
     // after retriving last message, free current page buffer
     if (offset == paged_message_indices_.back().total_msg_size()) {
-        if (page_ptr) reading_pages.erase(queue_id_);
+        reading_pages.erase(queue_id_);
     }
 
     return msgs;
