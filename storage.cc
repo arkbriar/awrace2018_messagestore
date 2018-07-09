@@ -127,7 +127,7 @@ void PagedFile::start_async_reader() {
             read(uint64_t(arr.page_idx) * FILE_PAGE_SIZE, arr.page.get());
 
             // try to send back, if failed, destory it
-            arr.cb_queue->try_push(page)
+            arr.cb_queue->try_push(arr.page);
         }
     });
     async_reader_->detach();
@@ -451,7 +451,7 @@ uint32_t MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset
                                  const char* ptr, Vector<MemBlock>& msgs) {
     uint64_t cur_offset = index.prev_total_msg_size;
     uint16_t size = index.msg_size;
-    if (offset >= cur_offset + size) return;
+    if (offset >= cur_offset + size) return 0;
 
     auto begin = ptr;
 
@@ -485,8 +485,10 @@ struct TLSMessageReadCache {
     bool preread_page = false;
     SharedPtr<ConcurrentBoundedQueue<SharedPtr<FilePage>>> preread_queue;
 
-    MessageReadCache() { preread_queue = std::make_shared<ConcurrentBoundedQueue>(); }
-    ~MessageReadCache() {
+    TLSMessageReadCache() {
+        preread_queue = std::make_shared<ConcurrentBoundedQueue<SharedPtr<FilePage>>>();
+    }
+    ~TLSMessageReadCache() {
         preread_queue->set_capacity(0);
         clear_left_msgs();
     }
@@ -516,7 +518,7 @@ struct TLSMessageReadCache {
 
     void clear_left_msgs() {
         for (auto& msg : msgs_left) {
-            if (msg.ptr) delete msg.ptr;
+            if (msg.ptr) ::free(msg.ptr);
         }
         msgs_left.clear();
     }
