@@ -1,6 +1,6 @@
 #!/bin/bash
 
-yum install -y wget gcc-c++ cmake3 boost-devel libevent-devel libzip-devel snappy-devel xz-devel lz4-devel gperftools-libs git
+yum install -y wget gcc-c++ cmake3 boost-devel libevent-devel libzip-devel snappy-devel xz-devel lz4-devel gperftools-libs git gdb
 ln -sf /usr/bin/cmake3 /usr/bin/cmake
 ln -sf /usr/lib64/libtcmalloc.so.4 /usr/lib64/libtcmalloc.so
 

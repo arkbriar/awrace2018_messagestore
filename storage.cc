@@ -158,6 +158,7 @@ uint64_t PagedFile::tls_write(const FilePage* page) {
         back_buf_mutex = std::make_shared<std::mutex>();
         active_buf = std::make_shared<TLSWriteBuffer>(this);
         back_buf = std::make_shared<TLSWriteBuffer>(this);
+        active_buf->allocate_offset();
         buffer_allocated = true;
     }
 
@@ -184,10 +185,14 @@ uint64_t PagedFile::tls_write(const FilePage* page) {
             back_buf_status.compare_exchange_strong(exp, BACK_BUF_FLUSHING);
             // going to flush
             buf_to_flush->flush();
+
+            exp = BACK_BUF_FLUSHING;
+            back_buf_status.compare_exchange_strong(exp, BACK_BUF_FREE);
         });
         flush_th.detach();
 
         // allocate new offset on active buffer, and write to it
+        active_buf->allocate_offset();
         page_offset = active_buf->write(page);
     }
     return page_offset;
