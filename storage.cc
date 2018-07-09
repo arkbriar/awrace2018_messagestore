@@ -577,7 +577,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
             cache_ptr->msgs_left.erase(cache_ptr->msgs_left.begin(),
                                        cache_ptr->msgs_left.begin() + i);
 
-            if (offset == paged_message_indices_[first_page_idx].total_msg_size()) {
+            if (offset == paged_message_indices_[first_page_idx].total_msg_size() || number == 0) {
                 // read all
                 ++first_page_idx;
             }
@@ -588,6 +588,11 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
 
     uint32_t msgs_left_unread = 0;
     auto page_ptr = cache_ptr->page;
+    if (first_page_idx <= last_page_idx) {
+        LOG("cached page offset: %ld, wanted page offset: %ld\n", page_ptr->header.offset,
+            paged_message_indices_[page_idx].file_idx * FILE_PAGE_SIZE);
+    }
+
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
 
