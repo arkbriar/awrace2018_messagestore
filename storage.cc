@@ -210,6 +210,12 @@ void PagedFile::tls_flush() {
             ;
         // wait for back to be flushed
         std::unique_lock<std::mutex> lock(*back_buf_mutex);
+
+        back_buf_mutex.reset();
+        active_buf.reset();
+        back_buf.reset();
+        back_buf_status.reset();
+        buffer_allocated = false;
     }
 }
 
@@ -236,7 +242,7 @@ void TLSWriteBuffer::allocate_offset() {
 void TLSWriteBuffer::flush() {
     std::unique_lock<std::mutex> lock(mutex_);
     assert(page_count_ <= TLS_WRITE_BUFFER_PAGE_SIZE);
-    file_->write(file_offset_, buf_, FILE_PAGE_SIZE * page_count_);
+    file_->write(file_offset_, buf_, FILE_PAGE_SIZE * uint64_t(page_count_));
     page_count_ = 0;
 }
 
@@ -602,15 +608,22 @@ void QueueStore::flush_all_before_read() {
     std::unique_lock<std::mutex> lock(flush_mutex_);
     if (flushed) return;
 
-    size_t grainsize = queues_.size() / std::thread::hardware_concurrency();
-    using RangeType = ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_range_type;
-    tbb::parallel_for(queues_.range(grainsize), [this](const RangeType& r) {
-        for (auto it = r.begin(); it != r.end(); ++it) {
-            auto mq_ptr = it->second;
-            mq_ptr->flush_last_page(true);
-        }
-        this->tls_get_data_file()->tls_flush();
-    });
+    for (auto it = queues_.begin(); it != queues_.end(); ++it) {
+        auto mq_ptr = it->second;
+        mq_ptr->flush_last_page(true);
+    }
+    this->tls_get_data_file()->tls_flush();
+
+    // using RangeType = ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_range_type;
+    // size_t grainsize = queues_.size() / std::thread::hardware_concurrency();
+    // tbb::parallel_for(queues_.range(grainsize), [this](const RangeType& r) {
+    //     for (auto it = r.begin(); it != r.end(); ++it) {
+    //         auto mq_ptr = it->second;
+    //         mq_ptr->flush_last_page(true);
+    //     }
+    //     this->tls_get_data_file()->tls_flush();
+    // });
+
     flushed = true;
 }
 
