@@ -589,7 +589,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     auto page_ptr = cache_ptr->page;
     if (first_page_idx <= last_page_idx) {
         // LOG("cached page offset: %ld, wanted page offset: %ld\n", page_ptr->header.offset,
-            paged_message_indices_[first_page_idx].page_idx * FILE_PAGE_SIZE);
+        // paged_message_indices_[first_page_idx].page_idx * FILE_PAGE_SIZE);
     }
 
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
