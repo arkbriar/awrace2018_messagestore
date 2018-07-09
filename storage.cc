@@ -220,7 +220,7 @@ void PagedFile::tls_flush() {
 
 #ifdef __linux__
 bool PagedFile::readahead(uint64_t offset, size_t size = FILE_PAGE_SIZE) {
-    return ::raedahead(fd_, offset, size) == 0;
+    return ::readahead(fd_, offset, size) == 0;
 }
 #endif
 
