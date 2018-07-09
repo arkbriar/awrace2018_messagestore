@@ -493,6 +493,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     file_pages.find(ac, queue_id_);
     if (ac.empty()) {
         file_pages.emplace(ac);
+        ac->second.header.offset = NEGATIVE_OFFSET;
     }
     FilePage& page = ac->second;
 
