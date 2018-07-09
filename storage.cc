@@ -218,6 +218,12 @@ void PagedFile::tls_flush() {
     }
 }
 
+#ifdef __linux__
+bool PagedFile::readahead(uint64_t offset, size_t size = FILE_PAGE_SIZE) {
+    return ::raedahead(fd_, offset, size) == 0;
+}
+#endif
+
 TLSWriteBuffer::TLSWriteBuffer(PagedFile* file) : file_(file) {}
 
 TLSWriteBuffer::~TLSWriteBuffer() {
@@ -502,6 +508,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     Vector<MemBlock> msgs;
     msgs.reserve(number);
 
+    uint16_t msgs_left = 0;
     FilePage page;
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
@@ -511,7 +518,15 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
                             FILE_PAGE_SIZE);
         // attention, here must be reference!
         assert(page.header.offset == index.page_idx * FILE_PAGE_SIZE);
-        read_msgs(index, offset, number, page.content, msgs);
+        msgs_left = read_msgs(index, offset, number, page.content, msgs);
+    }
+
+    if (msgs_left <= 10 && last_page_idx + 1 != paged_message_indices_.size()) {
+#ifdef __linux__
+        auto next_index = paged_message_indices_[last_page_idx + 1];
+        auto data_file_ptr = store_->get_data_file(next_index.file_idx);
+        data_file_ptr->readahead((uint64_t)next_index.page_idx * FILE_PAGE_SIZE);
+#endif
     }
 
     return msgs;

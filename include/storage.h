@@ -183,6 +183,10 @@ public:
     };
     bool async_read(const AsyncReadRequset& request);
 
+#ifdef __linux__
+    bool readahead(uint64_t offset, size_t size = FILE_PAGE_SIZE);
+#endif
+
 protected:
     Atomic<bool> async_reader_started{false};
     std::thread async_reader_[4];
