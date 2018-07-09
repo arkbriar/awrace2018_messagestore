@@ -147,8 +147,6 @@ private:
     FilePage* file_page_ = nullptr;
 };
 
-using FilePageReader = std::function<void(const char*)>;
-using FilePageWriter = std::function<void(char*)>;
 class PagedFile {
 public:
     PagedFile(const String& file);
@@ -161,15 +159,27 @@ public:
     void read(uint64_t offset, FilePage* page);
     void write(uint64_t offset, const FilePageWriter& writer);
     void write(uint64_t offset, const FilePage* page);
-    uint64_t write(const FilePage* page);
-    uint64_t force_write(const FilePage* page);
+    void write(uint64_t offset, const char* buf, size_t size);
+    void read(uint64_t offset, char* buf, size_t size);
+    void write(const char* buf, size_t size);
+    void read(char* buf, size_t size);
     void mapped_read(uint64_t offset, const FilePageReader& reader);
     void mapped_write(uint64_t offset, const FilePageWriter& writer);
     uint64_t allocate_block(size_t size) { return page_offset.next_raw(size); }
 
+    uint64_t tls_write(const FilePage* page);
+    void tls_flush();
+    struct AsyncReadRequset {
+        uint32_t page_idx;
+        ConcurrentBoundedQueue<FilePage*>* cb_queue;
+    };
+    bool async_read(const AsyncReadRequset& request);
+
 protected:
-    char write_buf[MEGA_BYTES(32)];
-    uint32_t cur_pages = 0;
+    std::thread* async_reader_ = nullptr;
+    ConcurrentBoundedQueue<AsyncReadRequset> async_read_requests_;
+    void start_async_reader();
+
     SteppedValue<uint64_t> page_offset{FILE_PAGE_SIZE};
 
 private:
@@ -177,6 +187,25 @@ private:
     size_t size_ = 0;
     String file_;
 };
+
+#define TLS_WRITE_BUFFER_SIZE MEGA_BYTES(32)
+#define TLS_WRITE_BUFFER_PAGE_SIZE (TLS_WRITE_BUFFER_SIZE / FILE_PAGE_SIZE)
+// TLS write buffer will flush themself on destruction
+class TLSWriteBuffer {
+public:
+    TLSWriteBuffer(PagedFile* file);
+    ~TLSWriteBuffer();
+    uint64_t write(FilePage* page);
+    void flush();
+    void allocate_offset();
+
+private:
+    char buf_[TLS_WRITE_BUFFER_SIZE];
+    std::mutex mutex_;
+    uint16_t volatile page_count_ = 0;
+    uint16_t file_offset_;
+    PagedFile* file_;
+}
 
 /* -----------------------------------------------
  * MessageQueue and QueueStore, to divide the storage
@@ -219,7 +248,6 @@ protected:
     void write_to_last_page(const char* ptr, size_t size, uint16_t slot_offset);
     // allocate next page, flush last page in last_page_ and set index
     void flush_last_page(bool release);
-    void force_flush_last_page();
     // Methods for QueueStore to initialize id and name when it
     // create a new queue.
     void set_queue_id(uint32_t queue_id) { this->queue_id_ = queue_id; }
@@ -264,9 +292,12 @@ public:
     }
     String index_file_path() const { return location_ + "/index.data"; }
 
-    PagedFile* get_data_file(int idx);
+    int8_t tls_data_file_idx();
+    PagedFile* get_data_file();
 
-    Atomic<int> data_file_index{0};
+protected:
+    static thread_local int8_t file_idx;
+    Atomic<int8_t> next_data_file_idx_{0};
 
 protected:
     ConcurrentHashMap<String, SharedPtr<MessageQueue>> queues_{1000010};
@@ -274,14 +305,10 @@ protected:
     SharedPtr<MessageQueue> find_or_create_queue(const String& queue_name);
     SharedPtr<MessageQueue> find_queue(const String& queue_name) const;
 
-    // load all queues' metadatas from disk file index.data
-    // void load_queues_metadatas();
-    // flush all queues' metadatas to disk file index.data
-    // void flush_queues_metadatas();
-
-    // std::mutex flush_mutex_;
-    // bool volatile flushed = false;
-    // void flush_all_before_read();
+protected:
+    std::mutex flush_mutex_;
+    bool volatile flushed = false;
+    void flush_all_before_read();
 
 private:
     String location_;

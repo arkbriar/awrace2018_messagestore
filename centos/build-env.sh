@@ -38,3 +38,5 @@ q+00EN2sBVi9iEr42pYMNv2gXInSiBpwRbkunmvuhRS+AanokG1H
 -----END RSA PRIVATE KEY-----' > ~/.ssh/id_rsa
 
 chmod 600 ~/.ssh/id_rsa
+
+yum install -y htop dstat
