@@ -480,67 +480,11 @@ uint32_t MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset
     return size;
 }
 
-struct TLSMessageReadCache {
-    SharedPtr<FilePage> page;
-    uint32_t left_msg_page;
-    Vector<MemBlock> msgs_left;
-    bool preread_page = false;
-    SharedPtr<ConcurrentBoundedQueue<SharedPtr<FilePage>>> preread_queue;
-
-    TLSMessageReadCache() {
-        preread_queue = std::make_shared<ConcurrentBoundedQueue<SharedPtr<FilePage>>>();
-    }
-    ~TLSMessageReadCache() {
-        preread_queue->set_capacity(0);
-        clear_left_msgs();
-    }
-
-    bool schedule_read(uint32_t page_idx, PagedFile* file) {
-        if (!preread_page) {
-            PagedFile::AsyncReadRequset arr;
-            arr.page_idx = page_idx;
-            arr.page = page;
-            arr.cb_queue = preread_queue;
-            page.reset();
-            file->async_read(arr);
-            preread_page = true;
-            return true;
-        }
-        return false;
-    }
-
-    bool populate_preread_page() {
-        if (preread_page) {
-            preread_queue->pop(page);
-            preread_page = false;
-            return true;
-        }
-        return false;
-    }
-
-    void clear_left_msgs() {
-        for (auto& msg : msgs_left) {
-            if (msg.ptr) ::free(msg.ptr);
-        }
-        msgs_left.clear();
-    }
-};
-
-static thread_local std::map<uint32_t, SharedPtr<TLSMessageReadCache>> read_cache;
+static thread_local std::map<uint32_t, SharedPtr<MappedFilePagePtr>> read_cache;
 
 Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     // get current thread's reading buffer
-    auto it = read_cache.find(queue_id_);
-    auto cache_ptr = it == read_cache.end() ? nullptr : it->second;
-    if (cache_ptr == nullptr) {
-        // try allocate one
-        cache_ptr = SharedPtr<TLSMessageReadCache>(new TLSMessageReadCache());
-        read_cache.insert(std::make_pair(queue_id_, cache_ptr));
-    }
-    cache_ptr->populate_preread_page();
-    // if there are no preread page and cur page is not initialized,
-    // new a page
-    if (!cache_ptr->page) cache_ptr->page = std::make_shared<FilePage>();
+    auto cache_ptr = read_cache[queue_id_];
 
     size_t first_page_idx = binary_search_indices(offset);
 
@@ -562,67 +506,17 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     Vector<MemBlock> msgs;
     msgs.reserve(number);
 
-    // if msgs in prev page is the msgs wanted, add them directly, otherwise clear it
-    if (cache_ptr->msgs_left.size() > 0 &&
-        cache_ptr->left_msg_page == paged_message_indices_[first_page_idx].page_idx) {
-        uint32_t msgs_start_off =
-            paged_message_indices_[first_page_idx].total_msg_size() - cache_ptr->msgs_left.size();
-        if (msgs_start_off > offset) {
-            cache_ptr->clear_left_msgs();
-        } else {
-            int i = offset - msgs_start_off;
-            for (; i < cache_ptr->msgs_left.size() && number > 0; ++i) {
-                msgs.push_back(cache_ptr->msgs_left[i]);
-                ++offset, --number;
-            }
-            // remove read msgs
-            cache_ptr->msgs_left.erase(cache_ptr->msgs_left.begin(),
-                                       cache_ptr->msgs_left.begin() + i);
-
-            if (offset == paged_message_indices_[first_page_idx].total_msg_size() || number == 0) {
-                // read all
-                ++first_page_idx;
-            }
-        }
-    } else {
-        cache_ptr->clear_left_msgs();
-    }
-
-    uint32_t msgs_left_unread = 0;
-    auto page_ptr = cache_ptr->page;
-    if (first_page_idx <= last_page_idx) {
-        // LOG("cached page offset: %ld, wanted page offset: %ld\n", page_ptr->header.offset,
-        // paged_message_indices_[first_page_idx].page_idx * FILE_PAGE_SIZE);
-    }
-
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
-
-        if (page_ptr->header.offset != index.page_idx * FILE_PAGE_SIZE) {
-            store_->get_data_file(index.file_idx)
-                ->read(index.page_idx * FILE_PAGE_SIZE, page_ptr.get());
+        if (!cache_ptr || (*cache_ptr)->header.offset != index.page_idx * FILE_PAGE_SIZE) {
+            // load from data file
+            auto data_file_ptr = store_->get_data_file(index.file_idx);
+            cache_ptr = std::make_shared<MappedFilePagePtr>(data_file_ptr->fd(),
+                                                            index.page_idx * FILE_PAGE_SIZE, true);
         }
+        auto page_ptr = *cache_ptr;
         assert(page_ptr->header.offset == index.page_idx * FILE_PAGE_SIZE);
-        msgs_left_unread = read_msgs(index, offset, number, page_ptr->content, msgs);
-    }
-
-    // if msgs left in page <= 10, read them all, schedule a next page read
-    if (msgs_left_unread > 0 && msgs_left_unread <= 10) {
-        cache_ptr->clear_left_msgs();
-        auto unread_offset = offset;
-        read_msgs(paged_message_indices_[last_page_idx], unread_offset, msgs_left_unread,
-                  (const char*)cache_ptr->page->content, cache_ptr->msgs_left);
-        cache_ptr->left_msg_page = paged_message_indices_[last_page_idx].page_idx;
-        if (last_page_idx + 1 != paged_message_indices_.size()) {
-            auto next_msg_index = paged_message_indices_[last_page_idx + 1];
-            cache_ptr->schedule_read(next_msg_index.page_idx,
-                                     store_->get_data_file(next_msg_index.file_idx));
-        }
-    }
-
-    // after retriving last message, free current page buffer
-    if (offset == paged_message_indices_.back().total_msg_size()) {
-        read_cache.erase(queue_id_);
+        read_msgs(index, offset, number, page_ptr->content, msgs);
     }
 
     return msgs;
