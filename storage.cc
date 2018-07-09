@@ -173,7 +173,7 @@ uint64_t PagedFile::tls_write(const FilePage* page) {
             std::swap(active_buf, back_buf);
             assert(back_buf_status.load() == BACK_BUF_FREE);
             uint32_t exp = BACK_BUF_FREE;
-            back_buf_status.compare_and_exchange_strong(exp, BACK_BUF_FLUSH_SCHEDULED);
+            back_buf_status.compare_exchange_strong(exp, BACK_BUF_FLUSH_SCHEDULED);
         }
         // start a thread to flush full (back) buf
         auto buf_to_flush = back_buf;
@@ -181,7 +181,7 @@ uint64_t PagedFile::tls_write(const FilePage* page) {
         std::thread flush_th([buf_to_flush, buf_mutex_ptr]() {
             std::unique_lock<std::mutex> lock(*buf_mutex_ptr);
             uint32_t exp = BACK_BUF_FLUSH_SCHEDULED;
-            back_buf_status.compare_and_exchange_strong(exp, BACK_BUF_FLUSHING);
+            back_buf_status.compare_exchange_strong(exp, BACK_BUF_FLUSHING);
             // going to flush
             buf_to_flush->flush();
         });
@@ -212,12 +212,14 @@ TLSWriteBuffer::~TLSWriteBuffer() {
     if (page_count_ > 0) flush();
 }
 
-uint64_t TLSWriteBuffer::write(FilePage* page) {
+uint64_t TLSWriteBuffer::write(const FilePage* page) {
     if (page_count_ >= TLS_WRITE_BUFFER_PAGE_SIZE) return NEGATIVE_OFFSET;
 
+    const_cast<FilePage*>(page)->header.offset =
+        file_offset_ + uint64_t(page_count_) * FILE_PAGE_SIZE;
     memcpy(buf_ + uint64_t(page_count_) * FILE_PAGE_SIZE, (const void*)page, FILE_PAGE_SIZE);
     ++page_count_;
-    return file_offset_ + uint64_t(page_count_) * FILE_PAGE_SIZE;
+    return page->header.offset;
 }
 
 void TLSWriteBuffer::allocate_offset() {
@@ -309,10 +311,6 @@ void MessageQueue::flush_last_page(bool release) {
     if (!last_page_) return;
     std::unique_lock<std::mutex> lock(wq_mutex_);
     if (!last_page_) return;
-
-    if (data_file_idx < 0) {
-        data_file_idx = store_->data_file_index.fetch_add(1);
-    }
 
     paged_message_indices_.back().file_idx = store_->tls_data_file_idx();
     paged_message_indices_.back().page_idx =
@@ -555,7 +553,7 @@ QueueStore::~QueueStore() {
 }
 
 thread_local int8_t QueueStore::file_idx = -1;
-int8_t tls_data_file_idx() {
+int8_t QueueStore::tls_data_file_idx() {
     if (file_idx < 0) {
         file_idx = next_data_file_idx_.fetch_add(1) % DATA_FILE_SPLITS;
     }

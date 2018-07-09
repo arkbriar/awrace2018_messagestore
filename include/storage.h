@@ -197,7 +197,7 @@ class TLSWriteBuffer {
 public:
     TLSWriteBuffer(PagedFile* file);
     ~TLSWriteBuffer();
-    uint64_t write(FilePage* page);
+    uint64_t write(const FilePage* page);
     void flush();
     void allocate_offset();
 
@@ -300,7 +300,7 @@ public:
 
 protected:
     static thread_local int8_t file_idx;
-    Atomic<int8_t> next_data_file_idx_{0};
+    Atomic<uint8_t> next_data_file_idx_{0};
 
 protected:
     ConcurrentHashMap<String, SharedPtr<MessageQueue>> queues_{1000010};
