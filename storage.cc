@@ -605,7 +605,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
         cache_ptr->clear_left_msgs();
         auto unread_offset = offset;
         read_msgs(paged_message_indices_[last_page_idx], unread_offset, msgs_left_unread,
-                  cache_ptr->msgs_left);
+                  (const char*)cache_ptr->page.get(), cache_ptr->msgs_left);
         cache_ptr->left_msg_page = paged_message_indices_[last_page_idx].page_idx;
         if (last_page_idx + 1 != paged_message_indices_.size()) {
             auto next_msg_index = paged_message_indices_[last_page_idx + 1];
