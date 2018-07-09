@@ -522,10 +522,9 @@ struct TLSMessageReadCache {
         }
         msgs_left.clear();
     }
-}
+};
 
-static thread_local std::map<uint32_t, SharedPtr<TLSMessageReadCache>>
-    read_cache;
+static thread_local std::map<uint32_t, SharedPtr<TLSMessageReadCache>> read_cache;
 
 Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     // get current thread's reading buffer
@@ -569,16 +568,20 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
         if (msgs_start_off > offset) {
             cache_ptr->clear_left_msgs();
         } else {
-            while (msgs_start_off < offset) {
-                cache_ptr->msgs_left.pop_front();
-                ++msgs_start_off;
+            int i = offset - msgs_start_off;
+            for (; i < cache_ptr->msgs_left.size(); ++i) {
+                msgs.push_back(cache_ptr->msgs_left[i]);
+                ++offset;
+                if (--number == 0) break;
             }
-            while (!cache_ptr->msgs_left.empty()) {
-                msgs.push_back(cache_ptr->msgs_left.front());
-                cache_ptr->msgs_left.pop_front();
-                ++offset, --number;
+            // remove read msgs
+            cache_ptr->msgs_left.erase(cache_ptr->msgs_left.begin(),
+                                       cache_ptr->msgs_left.begin() + i);
+
+            if (offset == paged_message_indices_[first_page_idx].total_msg_size()) {
+                // read all
+                ++first_page_idx;
             }
-            ++first_page_idx;
         }
     } else {
         cache_ptr->clear_left_msgs();
