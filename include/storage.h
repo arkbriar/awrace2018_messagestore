@@ -141,7 +141,12 @@ public:
     operator bool() const noexcept { return file_page_ != nullptr; }
     bool empty() const noexcept { return file_page_ == nullptr; }
     FilePage* get() noexcept { return file_page_; }
+
+    // delete all assignment operators
+    MappedFilePagePtr(const MappedFilePagePtr&) = delete;
+    MappedFilePagePtr(MappedFilePagePtr&&) = delete;
     MappedFilePagePtr& operator=(const MappedFilePagePtr&) = delete;
+    MappedFilePagePtr& operator=(MappedFilePagePtr&&) = delete;
 
 private:
     FilePage* file_page_ = nullptr;

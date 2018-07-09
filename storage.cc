@@ -508,14 +508,15 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
 
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
-        if (!cache_ptr ||
+        if (!cache_ptr || !*cache_ptr ||
             (*cache_ptr)->header.offset != uint64_t(index.page_idx) * FILE_PAGE_SIZE) {
             // load from data file
             auto data_file_ptr = store_->get_data_file(index.file_idx);
             cache_ptr = std::make_shared<MappedFilePagePtr>(
                 data_file_ptr->fd(), uint64_t(index.page_idx) * FILE_PAGE_SIZE, true);
         }
-        auto page_ptr = *cache_ptr;
+        // attention, here must be reference!
+        auto& page_ptr = *cache_ptr;
         assert(page_ptr->header.offset == index.page_idx * FILE_PAGE_SIZE);
         read_msgs(index, offset, number, page_ptr->content, msgs);
     }
@@ -552,6 +553,7 @@ int8_t QueueStore::tls_data_file_idx() {
 }
 
 PagedFile* QueueStore::tls_get_data_file() { return data_files_[tls_data_file_idx()]; }
+
 PagedFile* QueueStore::get_data_file(uint8_t idx) {
     assert(idx < DATA_FILE_SPLITS);
     return data_files_[idx];
