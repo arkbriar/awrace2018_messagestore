@@ -569,10 +569,9 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
             cache_ptr->clear_left_msgs();
         } else {
             int i = offset - msgs_start_off;
-            for (; i < cache_ptr->msgs_left.size(); ++i) {
+            for (; i < cache_ptr->msgs_left.size() && number > 0; ++i) {
                 msgs.push_back(cache_ptr->msgs_left[i]);
-                ++offset;
-                if (--number == 0) break;
+                ++offset, --number;
             }
             // remove read msgs
             cache_ptr->msgs_left.erase(cache_ptr->msgs_left.begin(),
