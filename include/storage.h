@@ -201,7 +201,7 @@ private:
     String file_;
 };
 
-#define TLS_WRITE_BUFFER_SIZE MEGA_BYTES(32)
+#define TLS_WRITE_BUFFER_SIZE MEGA_BYTES(64)
 #define TLS_WRITE_BUFFER_PAGE_SIZE (TLS_WRITE_BUFFER_SIZE / FILE_PAGE_SIZE)
 // TLS write buffer will flush themself on destruction
 class TLSWriteBuffer {
