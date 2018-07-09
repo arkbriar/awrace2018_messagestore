@@ -509,7 +509,7 @@ struct TLSMessageReadCache {
 
     bool populate_preread_page() {
         if (preread_page) {
-            preread_queue.pop(page);
+            preread_queue->pop(page);
             preread_page = false;
             return true;
         }
@@ -529,8 +529,8 @@ static thread_local std::map<uint32_t, SharedPtr<TLSMessageReadCache>>
 
 Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     // get current thread's reading buffer
-    auto it = reading_pages.find(queue_id_);
-    auto cache_ptr = it == reading_pages.end() ? nullptr : it->second;
+    auto it = read_cache.find(queue_id_);
+    auto cache_ptr = it == read_cache.end() ? nullptr : it->second;
     if (cache_ptr == nullptr) {
         // try allocate one
         cache_ptr = SharedPtr<TLSMessageReadCache>(new TLSMessageReadCache());
@@ -564,7 +564,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     // if msgs in prev page is the msgs wanted, add them directly, otherwise clear it
     if (cache_ptr->msgs_left.size() > 0 &&
         cache_ptr->left_msg_page == paged_message_indices_[first_page_idx].page_idx) {
-        msgs_start_off =
+        uint32_t msgs_start_off =
             paged_message_indices_[first_page_idx].total_msg_size() - cache_ptr->msgs_left.size();
         if (msgs_start_off > offset) {
             cache_ptr->clear_left_msgs();
@@ -613,7 +613,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
 
     // after retriving last message, free current page buffer
     if (offset == paged_message_indices_.back().total_msg_size()) {
-        reading_pages.erase(queue_id_);
+        read_cache.erase(queue_id_);
     }
 
     return msgs;
