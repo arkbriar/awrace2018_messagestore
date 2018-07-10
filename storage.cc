@@ -581,21 +581,20 @@ PagedFile* QueueStore::get_data_file(uint8_t idx) {
 }
 
 SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_name) {
-    ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_accessor ac;
-    if (!queues_.find(ac, queue_name)) {
+    auto it = queues_.find(queue_name);
+    if (it == queues_.end()) {
         uint32_t queue_id = next_queue_id_.next();
         SharedPtr<MessageQueue> queue_ptr = std::make_shared<MessageQueue>(queue_id, this);
-        queues_.insert(ac, std::make_pair(queue_name, queue_ptr));
+        it = queues_.insert(it, std::make_pair(queue_name, queue_ptr));
         DLOG("Created a new queue, id: %d, name: %s", q->get_queue_id(),
              q->get_queue_name().c_str());
     }
-    return ac->second;
+    return it->second;
 }
 
 SharedPtr<MessageQueue> QueueStore::find_queue(const String& queue_name) const {
-    ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_accessor ac;
-    auto found = queues_.find(ac, queue_name);
-    return found ? ac->second : nullptr;
+    auto it = queues_.find(queue_name);
+    return it == queues_.end() nullptr : it->second;
 }
 
 void QueueStore::put(const String& queue_name, const MemBlock& message) {
