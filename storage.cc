@@ -487,15 +487,15 @@ uint32_t MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset
     return size;
 }
 
-static thread_local map<uint32_t, Pair<uint8_t, FilePage>> file_pages;
+static thread_local std::map<uint32_t, Pair<uint8_t, FilePage>> file_pages;
 Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     auto it = file_pages.find(queue_id_);
     if (it == file_pages.end()) {
         file_pages.emplace(it);
         ac->second.first = 0xff;
     }
-    uint8_t& file_idx = ac->second.first;
-    FilePage& page = ac->second.second;
+    uint8_t& file_idx = it->second.first;
+    FilePage& page = it->second.second;
 
     size_t first_page_idx = binary_search_indices(offset);
 
