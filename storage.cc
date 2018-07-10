@@ -603,16 +603,6 @@ void QueueStore::flush_all_before_read() {
     MallocExtension::instance()->ReleaseFreeMemory();
     MallocExtension::instance()->SetMemoryReleaseRate(10.0);
 
-    // using RangeType = ConcurrentHashMap<String, SharedPtr<MessageQueue>>::const_range_type;
-    // size_t grainsize = queues_.size() / std::thread::hardware_concurrency();
-    // tbb::parallel_for(queues_.range(grainsize), [this](const RangeType& r) {
-    //     for (auto it = r.begin(); it != r.end(); ++it) {
-    //         auto mq_ptr = it->second;
-    //         mq_ptr->flush_last_page(true);
-    //     }
-    //     this->tls_get_data_file()->tls_flush();
-    // });
-
     flushed = true;
 }
 
