@@ -594,7 +594,7 @@ SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_nam
 
 SharedPtr<MessageQueue> QueueStore::find_queue(const String& queue_name) const {
     auto it = queues_.find(queue_name);
-    return it == queues_.end() nullptr : it->second;
+    return it == queues_.end() ? nullptr : it->second;
 }
 
 void QueueStore::put(const String& queue_name, const MemBlock& message) {
