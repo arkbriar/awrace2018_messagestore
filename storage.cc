@@ -487,7 +487,17 @@ uint32_t MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset
     return size;
 }
 
+static thread_local ConcurrentHashMap<uint32_t, Pair<uint8_t, FilePage>> file_pages;
 Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
+    decltype(file_pages)::accessor ac;
+    file_pages.find(ac, queue_id_);
+    if (ac.empty()) {
+        file_pages.emplace(ac);
+        ac->second.first = 0xff;
+    }
+    uint8_t& file_idx = ac->second.first;
+    FilePage& page = ac->second.second;
+
     size_t first_page_idx = binary_search_indices(offset);
 
     // messages from offset is not found
@@ -509,18 +519,22 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
     msgs.reserve(number);
 
     uint16_t msgs_left = 0;
-    FilePage page;
     for (size_t page_idx = first_page_idx; page_idx <= last_page_idx; ++page_idx) {
         auto& index = paged_message_indices_[page_idx];
         // load from data file
-        auto data_file_ptr = store_->get_data_file(index.file_idx);
-        data_file_ptr->read(uint64_t(index.page_idx) * FILE_PAGE_SIZE, (char*)&page,
-                            FILE_PAGE_SIZE);
+        if (file_idx != index.file_idx ||
+            page.header.offset != uint64_t(index.page_idx) * FILE_PAGE_SIZE) {
+            file_idx = index.file_idx;
+            auto data_file_ptr = store_->get_data_file(index.file_idx);
+            data_file_ptr->read(uint64_t(index.page_idx) * FILE_PAGE_SIZE, (char*)&page,
+                                FILE_PAGE_SIZE);
+        }
+        // attention, here must be reference!
         assert(page.header.offset == index.page_idx * FILE_PAGE_SIZE);
         msgs_left = read_msgs(index, offset, number, page.content, msgs);
     }
 
-    if (msgs_left <= 20 && last_page_idx + 1 != paged_message_indices_.size()) {
+    if (msgs_left <= 10 && last_page_idx + 1 != paged_message_indices_.size()) {
 #ifdef __linux__
         auto next_index = paged_message_indices_[last_page_idx + 1];
         auto data_file_ptr = store_->get_data_file(next_index.file_idx);
