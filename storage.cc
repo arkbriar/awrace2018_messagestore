@@ -254,7 +254,9 @@ void TLSWriteBuffer::flush() {
 MessageQueue::MessageQueue() {}
 
 MessageQueue::MessageQueue(uint32_t queue_id, QueueStore* store)
-    : queue_id_(queue_id), store_(store) {}
+    : MessageQueue(), queue_id_(queue_id), store_(store) {
+    paged_message_indices_.reserve(40);
+}
 
 struct __attribute__((__packed__)) MessageQueue::Metadata {
     uint32_t queue_id;
