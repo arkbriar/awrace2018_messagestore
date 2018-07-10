@@ -313,7 +313,7 @@ protected:
     Atomic<uint8_t> next_data_file_idx_{0};
 
 protected:
-    ConcurrentUnorderedMap<String, SharedPtr<MessageQueue>> queues_{2000000};
+    ConcurrentUnorderedMap<String, SharedPtr<MessageQueue>> queues_[100];
 
     SharedPtr<MessageQueue> find_or_create_queue(const String& queue_name);
     SharedPtr<MessageQueue> find_queue(const String& queue_name) const;
