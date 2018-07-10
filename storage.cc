@@ -251,10 +251,10 @@ void TLSWriteBuffer::flush() {
     page_count_ = 0;
 }
 
-MessageQueue::MessageQueue() {}
+MessageQueue::MessageQueue() : MessageQueue(-1, nullptr) {}
 
 MessageQueue::MessageQueue(uint32_t queue_id, QueueStore* store)
-    : MessageQueue(), queue_id_(queue_id), store_(store) {
+    : queue_id_(queue_id), store_(store) {
     paged_message_indices_.reserve(40);
 }
 
