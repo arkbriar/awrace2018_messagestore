@@ -487,12 +487,11 @@ uint32_t MessageQueue::read_msgs(const MessagePageIndex& index, uint32_t& offset
     return size;
 }
 
-static thread_local ConcurrentHashMap<uint32_t, Pair<uint8_t, FilePage>> file_pages;
+static thread_local map<uint32_t, Pair<uint8_t, FilePage>> file_pages;
 Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
-    decltype(file_pages)::accessor ac;
-    file_pages.find(ac, queue_id_);
-    if (ac.empty()) {
-        file_pages.emplace(ac);
+    auto it = file_pages.find(queue_id_);
+    if (it == file_pages.end()) {
+        file_pages.emplace(it);
         ac->second.first = 0xff;
     }
     uint8_t& file_idx = ac->second.first;
@@ -551,7 +550,7 @@ QueueStore::QueueStore(const String& location) : location_(location) {
         data_files_[i] = new PagedFile(data_file_path(i));
     }
 
-    LOG("Version: 2018-07-10 00:02. Branch: direct_read");
+    LOG("Version: 2018-07-10 12:5. Branch: direct_read");
 
     // currently loading from index file is disabled.
     /* load_queues_metadatas(); */
