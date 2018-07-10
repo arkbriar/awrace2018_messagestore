@@ -6,7 +6,6 @@
 #include <map>
 #include <thread>
 #include <gperftools/malloc_extension.h>
-#include <boost/asio/thread_pool.hpp>
 
 namespace race2018 {
 
@@ -151,7 +150,6 @@ const uint32_t BACK_BUF_FREE = 0, BACK_BUF_FLUSH_SCHEDULED = 1, BACK_BUF_FLUSHIN
 static thread_local SharedPtr<Atomic<uint32_t>> back_buf_status;
 // active is for writing, and back is always free or in flushing
 static thread_local SharedPtr<TLSWriteBuffer> active_buf, back_buf;
-static thread_local boost::asio::thread_pool pool(1);
 
 uint64_t PagedFile::tls_write(const FilePage* page) {
     // initiliaze buffers
@@ -182,7 +180,7 @@ uint64_t PagedFile::tls_write(const FilePage* page) {
         auto buf_to_flush = back_buf;
         auto buf_mutex_ptr = back_buf_mutex;
         auto status_ptr = back_buf_status;
-        boost::asio::post(pool, [buf_to_flush, status_ptr, buf_mutex_ptr]() {
+        std::thread flush_th([buf_to_flush, status_ptr, buf_mutex_ptr]() {
             std::unique_lock<std::mutex> lock(*buf_mutex_ptr);
             uint32_t exp = BACK_BUF_FLUSH_SCHEDULED;
             status_ptr->compare_exchange_strong(exp, BACK_BUF_FLUSHING);
@@ -192,6 +190,7 @@ uint64_t PagedFile::tls_write(const FilePage* page) {
             exp = BACK_BUF_FLUSHING;
             status_ptr->compare_exchange_strong(exp, BACK_BUF_FREE);
         });
+        flush_th.detach();
 
         // allocate new offset on active buffer, and write to it
         active_buf->allocate_offset();
