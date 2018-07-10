@@ -327,8 +327,6 @@ bool MessageQueue::next_message_slot(uint16_t& slot_offset, uint16_t size) {
 
 void MessageQueue::flush_last_page(bool release) {
     if (!last_page_) return;
-    std::unique_lock<std::mutex> lock(wq_mutex_);
-    if (!last_page_) return;
 
     paged_message_indices_.back().file_idx = store_->tls_data_file_idx();
     paged_message_indices_.back().page_idx =

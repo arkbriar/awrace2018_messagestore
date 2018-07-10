@@ -280,7 +280,6 @@ private:
     uint16_t cur_data_slot_off_ = 0;
 
     // Write buffer
-    std::mutex wq_mutex_;
     FilePage* last_page_;
 
     // Paged message index
