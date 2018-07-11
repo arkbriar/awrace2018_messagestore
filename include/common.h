@@ -57,7 +57,9 @@ using Atomic = std::atomic<T>;
 template <class K, class V, class C = tbb::tbb_hash_compare<K>>
 using ConcurrentHashMap = tbb::concurrent_hash_map<K, V, C>;
 template <class K, class V>
-using ConcurrentUnorderedMap = tbb::concurrent_unordered_map<K, V>;
+using ConcurrentUnorderedMap =
+    tbb::concurrent_unordered_map<K, V, tbb::tbb_hash<K>, std::equal_to<K>,
+                                  tbb::cache_aligned_allocator<std::pair<const K, V>>>;
 template <class T>
 using ConcurrentVector = tbb::concurrent_vector<T>;
 template <class T>
