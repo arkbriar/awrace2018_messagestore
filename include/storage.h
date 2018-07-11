@@ -215,7 +215,7 @@ public:
 private:
     char buf_[TLS_WRITE_BUFFER_SIZE];
     std::mutex mutex_;
-    uint16_t volatile page_count_ = 0;
+    uint16_t page_count_ = 0;
     uint64_t file_offset_;
     PagedFile* file_;
 };
@@ -226,10 +226,10 @@ private:
  ------------------------------------------------*/
 
 struct __attribute__((__packed__)) MessagePageIndex {
-    uint32_t volatile page_idx;
+    uint32_t page_idx;
     uint32_t prev_total_msg_size;
     uint16_t msg_size = 0;
-    uint8_t volatile file_idx;
+    uint8_t file_idx;
     MessagePageIndex() {}
     MessagePageIndex(uint32_t page_idx, uint32_t prev_total_msg_size)
         : page_idx(page_idx), prev_total_msg_size(prev_total_msg_size) {}
