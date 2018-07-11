@@ -313,7 +313,7 @@ bool MessageQueue::next_message_slot(uint16_t& slot_offset, uint16_t size) {
     // more average. This leads to 64 timepoints of first flush. I call it flush fast.
     bool flush_fast =
         paged_message_indices_.size() == 1 &&
-        paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x3f) + 1;
+        paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x1f) + 30;
 
     // if page is full or flush fast, then a new page should be allocated
     if (cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE || flush_fast) {
