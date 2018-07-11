@@ -537,10 +537,6 @@ QueueStore::QueueStore(const String& location) : location_(location) {
         data_files_[i] = new PagedFile(data_file_path(i));
     }
 
-    for (int i = 0; i < 100; ++i) {
-        queues_[i].rehash(16384);
-    }
-
     LOG("Version: 2018-07-10 1:48pm. Branch: direct_read");
 
     // currently loading from index file is disabled.
@@ -571,13 +567,11 @@ PagedFile* QueueStore::get_data_file(uint8_t idx) {
 }
 
 SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_name) {
-    size_t hash = std::hash<String>()(queue_name);
-    size_t bucket_idx = hash % 100;
-    auto it = queues_[bucket_idx].find(queue_name);
-    if (it == queues_[bucket_idx].end()) {
+    auto it = queues_.find(queue_name);
+    if (it == queues_.end()) {
         uint32_t queue_id = next_queue_id_.next();
         SharedPtr<MessageQueue> queue_ptr = std::make_shared<MessageQueue>(queue_id, this);
-        it = queues_[bucket_idx].insert(it, std::make_pair(queue_name, queue_ptr));
+        it = queues_.insert(it, std::make_pair(queue_name, queue_ptr));
         DLOG("Created a new queue, id: %d, name: %s", q->get_queue_id(),
              q->get_queue_name().c_str());
     }
@@ -585,10 +579,8 @@ SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_nam
 }
 
 SharedPtr<MessageQueue> QueueStore::find_queue(const String& queue_name) const {
-    size_t hash = std::hash<String>()(queue_name);
-    size_t bucket_idx = hash % 100;
-    auto it = queues_[bucket_idx].find(queue_name);
-    return it == queues_[bucket_idx].end() ? nullptr : it->second;
+    auto it = queues_.find(queue_name);
+    return it == queues_.end() ? nullptr : it->second;
 }
 
 void QueueStore::put(const String& queue_name, const MemBlock& message) {
@@ -602,11 +594,9 @@ void QueueStore::flush_all_before_read() {
     std::unique_lock<std::mutex> lock(flush_mutex_);
     if (flushed) return;
 
-    for (int i = 0; i < 100; ++i) {
-        for (auto it = queues_[i].begin(); it != queues_[i].end(); ++it) {
-            auto mq_ptr = it->second;
-            mq_ptr->flush_last_page(true);
-        }
+    for (auto it = queues_.begin(); it != queues_.end(); ++it) {
+        auto mq_ptr = it->second;
+        mq_ptr->flush_last_page(true);
     }
     this->tls_get_data_file()->tls_flush();
     // release free memory back to os
