@@ -67,6 +67,19 @@ template <class T>
 using ConcurrentQueue = tbb::concurrent_queue<T>;
 template <class T>
 using ConcurrentBoundedQueue = tbb::concurrent_bounded_queue<T>;
+
+template <class K, class V, class C = tbb::tbb_hash_compare<K>,
+          class A = tbb::cache_aligned_allocator<std::pair<const K, V>>>
+class ConcurrentHashMapProxy : public tbb::concurrent_hash_map<K, V, C, A> {
+public:
+    ConcurrentHashMapProxy(size_t n) : tbb::concurrent_hash_map<K, V, C, A>(n) {}
+    ~ConcurrentHashMapProxy() {
+        this->tbb::concurrent_hash_map<K, V, C, A>::~concurrent_hash_map<K, V, C, A>();
+    }
+    typename tbb::concurrent_hash_map<K, V, C, A>::const_pointer fast_find(const K& key) const {
+        return this->internal_fast_find(key);
+    }
+};
 }  // namespace race2018
 
 #endif  // QUEUE_RACE_COMMON_H

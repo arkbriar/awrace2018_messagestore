@@ -567,6 +567,9 @@ PagedFile* QueueStore::get_data_file(uint8_t idx) {
 }
 
 MessageQueue* QueueStore::find_or_create_queue(const String& queue_name) {
+    auto q_ptr = queues_.fast_find(queue_name);
+    if (q_ptr) return q_ptr->second;
+
     decltype(queues_)::const_accessor ac;
     queues_.find(ac, queue_name);
     if (ac.empty()) {
@@ -580,6 +583,9 @@ MessageQueue* QueueStore::find_or_create_queue(const String& queue_name) {
 }
 
 MessageQueue* QueueStore::find_queue(const String& queue_name) const {
+    auto q_ptr = queues_.fast_find(queue_name);
+    return q_ptr ? q_ptr->second : nullptr;
+
     decltype(queues_)::const_accessor ac;
     queues_.find(ac, queue_name);
     return ac.empty() ? nullptr : ac->second;
