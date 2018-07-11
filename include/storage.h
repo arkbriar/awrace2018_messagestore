@@ -225,11 +225,11 @@ private:
  * into individual queues.
  ------------------------------------------------*/
 
-struct __attribute__((__packed__)) MessagePageIndex {
+struct MessagePageIndex {
     uint32_t page_idx;
     uint32_t prev_total_msg_size;
     uint16_t msg_size = 0;
-    uint8_t file_idx;
+    uint16_t file_idx;
     MessagePageIndex() {}
     MessagePageIndex(uint32_t page_idx, uint32_t prev_total_msg_size)
         : page_idx(page_idx), prev_total_msg_size(prev_total_msg_size) {}
