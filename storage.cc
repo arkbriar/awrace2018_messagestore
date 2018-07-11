@@ -566,12 +566,12 @@ PagedFile* QueueStore::get_data_file(uint8_t idx) {
     return data_files_[idx];
 }
 
-SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_name) {
+MessageQueue* QueueStore::find_or_create_queue(const String& queue_name) {
     decltype(queues_)::const_accessor ac;
     queues_.find(ac, queue_name);
     if (ac.empty()) {
         uint32_t queue_id = next_queue_id_.next();
-        SharedPtr<MessageQueue> queue_ptr = std::make_shared<MessageQueue>(queue_id, this);
+        auto queue_ptr = new MessageQueue(queue_id, this);
         queues_.insert(ac, std::make_pair(queue_name, queue_ptr));
         DLOG("Created a new queue, id: %d, name: %s", q->get_queue_id(),
              q->get_queue_name().c_str());
@@ -579,10 +579,10 @@ SharedPtr<MessageQueue> QueueStore::find_or_create_queue(const String& queue_nam
     return ac->second;
 }
 
-SharedPtr<MessageQueue> QueueStore::find_queue(const String& queue_name) const {
+MessageQueue* QueueStore::find_queue(const String& queue_name) const {
     decltype(queues_)::const_accessor ac;
     queues_.find(ac, queue_name);
-    return ac.empty() ? nullptr : it->second;
+    return ac.empty() ? nullptr : ac->second;
 }
 
 void QueueStore::put(const String& queue_name, const MemBlock& message) {
