@@ -313,7 +313,7 @@ protected:
     Atomic<uint8_t> next_data_file_idx_{0};
 
 protected:
-    ConcurrentHashMapProxy<String, MessageQueue*> queues_{1500000};
+    ConcurrentHashMapProxy<String, MessageQueue*> queues_{1344444};
 
     MessageQueue* find_or_create_queue(const String& queue_name);
     MessageQueue* find_queue(const String& queue_name) const;
