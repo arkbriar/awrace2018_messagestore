@@ -289,7 +289,7 @@ private:
     QueueStore* store_;
 };
 
-#define DATA_FILE_SPLITS 5
+#define DATA_FILE_SPLITS 10
 
 class QueueStore {
 public:
@@ -313,7 +313,7 @@ protected:
     Atomic<uint8_t> next_data_file_idx_{0};
 
 protected:
-    ConcurrentHashMapProxy<String, MessageQueue*> queues_{1344444};
+    ConcurrentHashMapProxy<String, MessageQueue*> queues_{1600000};
 
     MessageQueue* find_or_create_queue(const String& queue_name);
     MessageQueue* find_queue(const String& queue_name) const;
