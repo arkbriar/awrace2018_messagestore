@@ -289,7 +289,7 @@ private:
     QueueStore* store_;
 };
 
-#define DATA_FILE_SPLITS 10
+#define DATA_FILE_SPLITS 5
 
 class QueueStore {
 public:

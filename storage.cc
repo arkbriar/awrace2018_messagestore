@@ -520,7 +520,7 @@ Vector<MemBlock> MessageQueue::get(uint32_t offset, uint32_t number) {
         msgs_left = read_msgs(index, offset, number, page.content, msgs);
     }
 
-    if (msgs_left <= 10 && last_page_idx + 1 != paged_message_indices_.size()) {
+    if (msgs_left <= 15 && last_page_idx + 1 != paged_message_indices_.size()) {
 #ifdef __linux__
         auto next_index = paged_message_indices_[last_page_idx + 1];
         auto data_file_ptr = store_->get_data_file(next_index.file_idx);
