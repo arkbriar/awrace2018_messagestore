@@ -316,7 +316,7 @@ bool MessageQueue::next_message_slot(uint16_t& slot_offset, uint16_t size) {
         paged_message_indices_.back().msg_size >= ((queue_id_ / DATA_FILE_SPLITS) & 0x3f) + 1;
 
     // if page is full or flush fast, then a new page should be allocated
-    if (cur_data_slot_off_ + size > FILE_PAGE_AVALIABLE_SIZE || flush_fast) {
+    if (cur_data_slot_off_ + size > FILE_PAGE_AVAILABLE_SIZE || flush_fast) {
         slot_offset = 0;
         cur_data_slot_off_ = size;
         return true;

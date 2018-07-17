@@ -114,12 +114,12 @@ struct __attribute__((__packed__)) FilePageHeader {
 };
 
 #define FILE_PAGE_HEADER_SIZE sizeof(FilePageHeader)
-#define FILE_PAGE_AVALIABLE_SIZE (FILE_PAGE_SIZE - FILE_PAGE_HEADER_SIZE)
+#define FILE_PAGE_AVAILABLE_SIZE (FILE_PAGE_SIZE - FILE_PAGE_HEADER_SIZE)
 
 // File page
 struct __attribute__((__packed__)) FilePage {
     FilePageHeader header;
-    char content[FILE_PAGE_AVALIABLE_SIZE];
+    char content[FILE_PAGE_AVAILABLE_SIZE];
 };
 #define FILE_PAGE_SLOT_OFFSET_OF(offset) (offset & (FILE_PAGE_SIZE - 1) - FILE_PAGE_HEADER_SIZE)
 #define FILE_PAGE_OFFSET_OF(offset) (offset - (offset & (FILE_PAGE_SIZE - 1))
